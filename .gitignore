@@ -1,0 +1,74 @@
+# Miscellaneous
+*.class
+*.log
+*.pyc
+*.swp
+.DS_Store
+.atom/
+.build/
+.buildlog/
+.history
+.svn/
+.swiftpm/
+migrate_working_dir/
+
+# IntelliJ related
+*.iml
+*.ipr
+*.iws
+.idea/
+
+# The .vscode folder contains launch configuration and tasks you configure in
+# VS Code which you may wish to be included in version control, so this line
+# is commented out by default.
+#.vscode/
+
+# Flutter/Dart/Pub related
+**/doc/api/
+**/ios/Flutter/.last_build_id
+.dart_tool/
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+/build/
+/coverage/
+
+# 代码生成产物（build_runner / drift）。
+# 不入库：CI 与本地都靠 `dart run build_runner build` 现场生成，
+# 避免生成文件与 .drift 定义两边不一致（手改生成文件是最常见的事故来源）。
+*.g.dart
+*.freezed.dart
+*.gr.dart
+
+# 工具/智能体在本项目的本地状态（记忆、预览图、临时文件等）。
+# 整目录忽略：都不是源码，且常含本机绝对路径与凭据。
+# `.workbuddy-ai/` 是同类目录（仅名称差一个横杠），一并忽略 —— 否则
+# 同一类笔记会因为目录名不同而一部分入库、一部分不入库。
+.workbuddy/
+.workbuddy-ai/
+
+# keystore 的 Base64 副本等价于明文私钥。上面已整目录忽略，
+# 这里再用扩展名兜一层，防止它被复制到别处（比如仓库根目录）后漏网。
+*.b64
+*.jks.b64
+
+# Flutter 工具的本机状态文件（是否 bot、各 channel 上次版本、许可哈希、
+# 欢迎语是否已展示）。不入库：本机状态跟着仓库走会污染他人与 CI 环境
+# （例如 is-bot: true 被 CI 检出后会让 Flutter 按 bot 模式行事）。
+.flutter_tool_state
+
+# Symbolication related
+app.*.symbols
+
+# Obfuscation related
+app.*.map.json
+
+# Android Studio will place build artifacts here
+/android/app/debug
+/android/app/profile
+/android/app/release
+# Widget Preview related
+.widget_preview/
+
+# 临时文件
+temp/

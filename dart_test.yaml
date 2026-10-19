@@ -1,0 +1,16 @@
+# 测试运行配置。
+#
+# `perf` 标签的基准文件（test/perf/）默认**跳过**：它们是用来量「改动前 vs 改动后」
+# 相对变化的，单次要跑十几秒，放进日常 `flutter test` 只会拖慢反馈、还刷一屏数字。
+#
+# 想看数：
+#   flutter test --run-skipped test/perf/
+# 日常只跑功能测试：
+#   flutter test
+#
+# 为什么用 `skip` 而不是 `exclude_tags`：`exclude_tags` 会和命令行的 `--tags`
+# 撞车（include 和 exclude 同时命中同一个标签 → 一个都不跑，等于这个基准永远跑不了）。
+# `skip` 只影响默认行为，`--run-skipped` 能干净地把它放出来。
+tags:
+  perf:
+    skip: "性能基准默认跳过；要看数：flutter test --run-skipped test/perf/"

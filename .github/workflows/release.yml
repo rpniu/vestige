@@ -1,0 +1,282 @@
+name: Release
+
+# 打 tag 时触发，tag 形如 v1.2.3 / v1.2.3+4 / v1.0.0-beta.1
+# 不写成 tags: ['v*'] 是为了顺手挡掉 vNext 这类非版本 tag。
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+-*'
+      - 'v[0-9]+.[0-9]+.[0-9]+\+*'
+
+# 同时只允许一个发布流程在跑：连着推两个 tag 时，后来的排队而不是把前一个打断。
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+# 只读仓库；发布 Release 所需的写权限单独给到 job 上（见下）。
+permissions:
+  contents: read
+
+env:
+  FLUTTER_VERSION: '3.47.5' # 与 .metadata / 本地 flutter --version 对齐
+  JAVA_VERSION: '17'       # 与 android/app/build.gradle.kts 的 jvmTarget 对齐
+
+jobs:
+  # ── 1) 校验：测试不过、静态检查不干净就不要发版 ────────────────────────
+  verify:
+    name: Analyze & test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Set up Flutter ${{ env.FLUTTER_VERSION }}
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Flutter version
+        run: flutter --version
+
+      - name: Pub get
+        run: flutter pub get
+
+      # 项目用 build_runner/drift_dev 生成代码，*.g.dart 不入库，
+      # 所以必须在 analyze / test 之前跑一次生成，否则会因为缺 .g.dart 而解析失败。
+      - name: Generate code (drift)
+        run: dart run build_runner build --delete-conflicting-outputs
+
+      - name: Analyze
+        run: flutter analyze --no-fatal-infos
+
+      - name: Test
+        run: flutter test --reporter expanded
+
+  # ── 2) 构建 Android：签名 → 产物 → Release 附件 ───────────────────────
+  build-android:
+    name: Build Android
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: write # 创建 Release 需要写权限
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Set up Flutter ${{ env.FLUTTER_VERSION }}
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Pub get
+        run: flutter pub get
+
+      - name: Generate code (drift)
+        run: dart run build_runner build --delete-conflicting-outputs
+
+      # tag 里的版本号就是这一版的版本号，不用手改 pubspec.yaml。
+      # v1.2.3        → version=1.2.3  build=run_number
+      # v1.2.3+4      → version=1.2.3  build=4
+      # 用 build-number 覆盖 build 号，保证每次 tag 出的包 versionCode 递增，
+      # 否则多个 tag 会撞上同一个 versionCode 而装不上。
+      - name: Resolve version from tag
+        id: ver
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          BARE="${TAG#v}"
+          if [[ "$BARE" == *"+"* ]]; then
+            NAME="${BARE%%+*}"
+            NUM="${BARE##*+}"
+          else
+            NAME="$BARE"
+            NUM="${GITHUB_RUN_NUMBER}"
+          fi
+          echo "name=$NAME"   >> "$GITHUB_OUTPUT"
+          echo "build=$NUM"   >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG"     >> "$GITHUB_OUTPUT"
+          echo "Resolved: --build-name=$NAME --build-number=$NUM"
+
+      # 用 secrets 还原 keystore 与 key.properties。仓库里这两个文件是
+      # gitignore 的，CI 上必须从 secret 注回来，否则只会得到 debug 签名的包。
+      #
+      # 两个防御：① 从网页粘贴 base64 时很容易带进换行/空格，base64 -d 会拒收 → 先剔除；
+      # ② 粘贴时常把末尾的 = 补位吃掉，base64 -d 会报 invalid input → 按长度补回来。
+      - name: Restore keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${KEYSTORE_BASE64:-}" ]]; then
+            echo "::error::缺少 secret ANDROID_KEYSTORE_BASE64，无法给 release 包签名。"
+            echo "::error::生成方式：base64 -w0 android/app/vestige-release.jks"
+            exit 1
+          fi
+          for v in KEYSTORE_PASSWORD KEY_ALIAS KEY_PASSWORD; do
+            if [[ -z "${!v:-}" ]]; then
+              echo "::error::缺少 secret $v。"
+              exit 1
+            fi
+          done
+
+          B64="$(printf '%s' "$KEYSTORE_BASE64" | tr -d '[:space:]')"
+          case $(( ${#B64} % 4 )) in
+            2) B64="${B64}==" ;;
+            3) B64="${B64}=" ;;
+          esac
+
+          printf '%s' "$B64" | base64 -d > android/app/vestige-release.jks
+
+          # 提前在 CI 上验一次：密码错了 / 文件被截断，都在这里就暴露，
+          # 不要等到 apk 签名那一步才报一个看不懂的错。
+          keytool -list -keystore android/app/vestige-release.jks \
+            -storepass "$KEYSTORE_PASSWORD" -alias "$KEY_ALIAS" > /dev/null
+
+          cat > android/key.properties <<EOF
+          storePassword=$KEYSTORE_PASSWORD
+          keyPassword=$KEY_PASSWORD
+          keyAlias=$KEY_ALIAS
+          storeFile=vestige-release.jks
+          EOF
+
+      - name: Build APK (split per ABI)
+        run: |
+          flutter build apk --release --split-per-abi \
+            --build-name=${{ steps.ver.outputs.name }} \
+            --build-number=${{ steps.ver.outputs.build }}
+
+      - name: Build AAB
+        run: |
+          flutter build appbundle --release \
+            --build-name=${{ steps.ver.outputs.name }} \
+            --build-number=${{ steps.ver.outputs.build }}
+
+      # split-per-abi 会额外产出一个 app-release.apk（含全部 ABI），
+      # 它体积最大、与分架构包重复，发版时不带它，只留 arm64 / armeabi-v7a / x86_64。
+      - name: Collect artifacts
+        id: collect
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          shopt -s nullglob
+          for f in build/app/outputs/flutter-apk/app-*-release.apk; do
+            cp "$f" "dist/vestige-${{ steps.ver.outputs.tag }}-$(basename "$f")"
+          done
+          cp build/app/outputs/bundle/release/app-release.aab \
+             "dist/vestige-${{ steps.ver.outputs.tag }}.aab"
+          ls -lh dist
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-${{ steps.ver.outputs.tag }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ steps.ver.outputs.tag }}
+          generate_release_notes: true
+          files: dist/*
+          fail_on_unmatched_files: true
+
+  # ── 3) 构建 Windows 桌面版 ────────────────────────────────────────────
+  # 外发正式的 Windows 安装包之前，建议先把这里换成带签名的 Inno Setup 安装器；
+  # 当前只打包 zip，用户解压后跑 vestige.exe。
+  build-windows:
+    name: Build Windows
+    needs: verify
+    runs-on: windows-latest
+    timeout-minutes: 40
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter ${{ env.FLUTTER_VERSION }}
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Pub get
+        run: flutter pub get
+
+      - name: Generate code (drift)
+        run: dart run build_runner build --delete-conflicting-outputs
+
+      - name: Resolve version from tag
+        id: ver
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          BARE="${TAG#v}"
+          if [[ "$BARE" == *"+"* ]]; then
+            NAME="${BARE%%+*}"
+            NUM="${BARE##*+}"
+          else
+            NAME="$BARE"
+            NUM="${GITHUB_RUN_NUMBER}"
+          fi
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "build=$NUM" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG"   >> "$GITHUB_OUTPUT"
+
+      - name: Build Windows
+        run: |
+          flutter build windows --release `
+            --build-name=${{ steps.ver.outputs.name }} `
+            --build-number=${{ steps.ver.outputs.build }}
+
+      - name: Package zip
+        shell: pwsh
+        run: |
+          $tag = "${{ steps.ver.outputs.tag }}"
+          Compress-Archive `
+            -Path "build/windows/x64/runner/Release/*" `
+            -DestinationPath "vestige-$tag-windows-x64.zip" `
+            -Force
+          Get-ChildItem "vestige-$tag-windows-x64.zip" | Format-List Name, Length
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-${{ steps.ver.outputs.tag }}
+          path: vestige-*-windows-x64.zip
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Attach to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: vestige-*-windows-x64.zip
+          fail_on_unmatched_files: true
