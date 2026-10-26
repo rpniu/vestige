@@ -10,6 +10,7 @@ import 'package:vestige/app/theme.dart';
 import 'package:vestige/data/config/home_layout_config.dart';
 import 'package:vestige/domain/csv_util.dart';
 import 'package:vestige/presentation/providers/home_layout_provider.dart';
+import 'package:vestige/presentation/providers/package_info_provider.dart';
 import 'package:vestige/presentation/providers/records_provider.dart';
 import 'package:vestige/presentation/providers/theme_provider.dart';
 import 'package:vestige/presentation/services/csv_file.dart';
@@ -114,9 +115,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                       icon: Icons.switch_access_shortcut_rounded,
                     ),
                     title: side == ButtonSide.left ? '靠左' : '靠右',
-                    subtitle: i == 0
-                        ? '「记一笔」与速记 / 计时胶囊停靠的屏幕侧'
-                        : null,
+                    subtitle: i == 0 ? '「记一笔」与速记 / 计时胶囊停靠的屏幕侧' : null,
                     selected: layout == side,
                     onTap: () => ref
                         .read(homeButtonLayoutProvider.notifier)
@@ -172,7 +171,10 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
           Card(
             child: _ActionTile(
               icon: Icons.info_outline_rounded,
-              title: 'Vestige 1.0.0',
+              // 版本号读系统安装清单（打包时 --build-name 写入，CI 发版 =
+              // tag 版本），不再手写 —— 发了 v1.1.0 这里就显示 v1.1.0。
+              title:
+                  'Vestige ${ref.watch(packageInfoProvider).valueOrNull?.version ?? ''}',
               subtitle: '记录日期与入库时间分离，支持随时随地补记',
               onTap: _showAbout,
             ),
