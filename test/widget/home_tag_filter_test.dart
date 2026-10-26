@@ -102,7 +102,7 @@ Finder _rowBoxes() => find.descendant(
 Finder _bannerChip(String tag) => find.ancestor(
       of: find.text('#$tag'),
       matching: find.byWidgetPredicate(
-        (w) => w is Row && w.children.any((c) => c is Icon && c.icon == Icons.close),
+        (w) => w is Row && w.children.any((c) => c is Icon && c.icon == Icons.close_rounded),
       ),
     );
 

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:vestige/app/theme.dart';
 
 /// 居中弹层：全站模态选择的统一容器（替代原先的底部弹层）。
 ///
@@ -27,13 +28,19 @@ Future<T?> showVestigeCenterDialog<T>({
     context: context,
     builder: (BuildContext dialogContext) {
       return Dialog(
-        // 手机上左右各留 32（内容约 300 宽起步），平板/横屏不超过 560 ——
+        // 手机上左右各留 20（360dp 的屏也能拿到 320 宽），平板/横屏不超过 560 ——
         // 与洞察卡「内宽 ≥520 切 4 列」的断点同量级，弹层不至于铺满大屏。
-        insetPadding: const EdgeInsets.symmetric(horizontal: 32, vertical: 24),
+        insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+        // 覆盖 dialogTheme 的 32 大圆角：选择类弹层要的是「一块大矩形容器」
+        // 的稳定感（2026-10-22 用户反馈「外部改为一个再大一点的矩形」），
+        // 24 圆角与卡片同档，轮廓更方正、内部宽度利用也更足。
+        shape: RoundedRectangleBorder(borderRadius: VestigeRadius.mediumAll),
         child: ConstrainedBox(
           constraints: BoxConstraints(
-            // 小内容（比如只有两三年的年份列表）不至于缩成一条窄带。
-            minWidth: 300,
+            // 小内容（比如只有两三年的年份列表）也不至于缩成一条窄带。
+            // 560 = 上限：桌面上是一整块铺开的矩形容器；
+            // 窄屏上被 inset 夹住时自动取屏宽（Constraints 归一化会钳到外部 max）。
+            minWidth: 560,
             maxWidth: 560,
             maxHeight: MediaQuery.sizeOf(dialogContext).height * maxHeightFactor,
           ),

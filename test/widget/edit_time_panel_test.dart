@@ -145,7 +145,7 @@ void main() {
       await tester.tap(find.text('${yesterday.day}'));
     } else {
       // 今天是 1 号：昨天落在上个月，先翻页（上个月最后一天一定可选）
-      await tester.tap(find.byIcon(Icons.chevron_left));
+      await tester.tap(find.byIcon(Icons.chevron_left_rounded));
       await tester.pumpAndSettle();
       await tester.tap(find.text('${yesterday.day}'));
     }

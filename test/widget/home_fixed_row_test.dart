@@ -23,7 +23,6 @@ import 'package:vestige/presentation/providers/theme_provider.dart';
 import 'package:vestige/presentation/screens/home_screen.dart';
 import 'package:vestige/presentation/widgets/record_card.dart';
 import 'package:vestige/presentation/widgets/row_metrics.dart';
-import 'package:vestige/presentation/widgets/scroll_jump_button.dart';
 
 RecordEntity _record(
   int i,
@@ -100,13 +99,13 @@ void main() {
     await tester.pumpAndSettle();
     await tester.drag(find.byType(CustomScrollView), const Offset(0, -300));
     await tester.pumpAndSettle();
-    expect(find.byIcon(Icons.vertical_align_bottom), findsOneWidget);
+    expect(find.byIcon(Icons.vertical_align_bottom_rounded), findsOneWidget);
 
     final position = _position(tester);
     expect(position.maxScrollExtent, greaterThan(100000));
 
     RecordCard.debugBuildCount = 0;
-    await tester.tap(find.byType(ScrollJumpButton));
+    await tester.tap(find.byKey(const ValueKey('to_bottom_button')));
     await tester.pump(); // 动画第 0 帧：偏移还没动
     await tester.pump(const Duration(milliseconds: 16)); // 第一个真正推进的帧
 

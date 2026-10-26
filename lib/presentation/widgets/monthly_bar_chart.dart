@@ -1,5 +1,6 @@
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
+import 'package:vestige/app/motion.dart';
 import 'package:vestige/app/theme.dart';
 import 'package:vestige/presentation/providers/records_provider.dart';
 
@@ -10,11 +11,7 @@ import 'package:vestige/presentation/providers/records_provider.dart';
 /// 一眼就能看出「这个月的记录里有多少是后来补的」。
 /// 柱顶数字则是把「多少条」从「必须点一下才知道」变成一眼可见。
 class MonthlyBarChart extends StatelessWidget {
-  const MonthlyBarChart({
-    super.key,
-    required this.data,
-    this.height = 240,
-  });
+  const MonthlyBarChart({super.key, required this.data, this.height = 240});
 
   final List<MonthStat> data;
   final double height;
@@ -31,8 +28,7 @@ class MonthlyBarChart extends StatelessWidget {
     // 所以多留这一截不会把 Y 轴刻度搞成怪数字。
     final niceMax = scale.niceMax;
     final maxY = scale.maxY;
-    final horizontalStep =
-        niceMax <= 4 ? 1.0 : (niceMax / 4).ceilToDouble();
+    final horizontalStep = niceMax <= 4 ? 1.0 : (niceMax / 4).ceilToDouble();
     final labelStyle = theme.textTheme.labelSmall?.copyWith(
       color: scheme.onSurfaceVariant,
       fontWeight: FontWeight.w700,
@@ -40,135 +36,146 @@ class MonthlyBarChart extends StatelessWidget {
 
     return SizedBox(
       height: height,
-      child: BarChart(
-        BarChartData(
-          alignment: BarChartAlignment.spaceAround,
-          maxY: maxY,
-          minY: 0,
-          barTouchData: BarTouchData(
-            touchTooltipData: BarTouchTooltipData(
-              getTooltipColor: (_) => scheme.inverseSurface,
-              tooltipBorderRadius: BorderRadius.circular(12),
-              getTooltipItem: (group, groupIndex, rod, rodIndex) {
-                final index = group.x - 1;
-                if (index < 0 || index >= data.length) return null;
-                final stat = data[index];
-                return BarTooltipItem(
-                  '${stat.month}月 · 共 ${stat.count} 条',
-                  TextStyle(
-                    color: scheme.onInverseSurface,
-                    fontWeight: FontWeight.w700,
-                    fontSize: 12,
-                  ),
-                  children: <TextSpan>[
-                    if (stat.backfilled > 0)
-                      TextSpan(
-                        text: '\n其中补记 ${stat.backfilled} 条',
-                        style: TextStyle(
-                          color: tokens.backfill,
-                          fontWeight: FontWeight.w500,
-                          fontSize: 11,
+      // 入场生长：首次进入页面时柱高从 0 长到目标值（slow 档）。
+      // fl_chart 的 duration 只负责「数据变化时」的过渡（初次构建没有前一帧，
+      // 不会动），所以入场这一下要自己驱动：用 t 缩放每根柱的数据值，
+      // 轴刻度与量程保持不动，观感是「柱子在固定坐标系里长出来」。
+      child: TweenAnimationBuilder<double>(
+        tween: Tween<double>(begin: 0, end: 1),
+        duration: VestigeMotion.slow,
+        curve: VestigeMotion.curve,
+        builder: (context, t, _) => BarChart(
+          BarChartData(
+            alignment: BarChartAlignment.spaceAround,
+            maxY: maxY,
+            minY: 0,
+            barTouchData: BarTouchData(
+              touchTooltipData: BarTouchTooltipData(
+                getTooltipColor: (_) => scheme.inverseSurface,
+                tooltipBorderRadius: BorderRadius.circular(12),
+                getTooltipItem: (group, groupIndex, rod, rodIndex) {
+                  final index = group.x - 1;
+                  if (index < 0 || index >= data.length) return null;
+                  final stat = data[index];
+                  return BarTooltipItem(
+                    '${stat.month}月 · 共 ${stat.count} 条',
+                    TextStyle(
+                      color: scheme.onInverseSurface,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 12,
+                    ),
+                    children: <TextSpan>[
+                      if (stat.backfilled > 0)
+                        TextSpan(
+                          text: '\n其中补记 ${stat.backfilled} 条',
+                          style: TextStyle(
+                            color: tokens.backfill,
+                            fontWeight: FontWeight.w500,
+                            fontSize: 11,
+                          ),
+                        ),
+                    ],
+                  );
+                },
+              ),
+            ),
+            gridData: FlGridData(
+              show: true,
+              drawVerticalLine: false,
+              horizontalInterval: horizontalStep,
+              getDrawingHorizontalLine: (value) => FlLine(
+                // 网格线只是读数的辅助，压淡一档 —— 它比柱子显眼时，图的重点是错的。
+                color: scheme.outlineVariant.withValues(alpha: 0.35),
+                strokeWidth: 1,
+                dashArray: const <int>[4, 4],
+              ),
+            ),
+            borderData: FlBorderData(show: false),
+            titlesData: FlTitlesData(
+              topTitles: const AxisTitles(),
+              rightTitles: const AxisTitles(),
+              leftTitles: AxisTitles(
+                sideTitles: SideTitles(
+                  showTitles: true,
+                  reservedSize: 34,
+                  interval: horizontalStep,
+                  getTitlesWidget: (value, meta) {
+                    // 超过实量程（niceMax）的刻度一律不画：maxY 高出 niceMax 的那一截
+                    // 是给柱顶数字留的位置，在那儿标一个刻度会让人误以为量程更大
+                    // （35 条的数据出现一个「40」的刻度，读起来很怪）。
+                    if (value < 0 || value > niceMax) {
+                      return const SizedBox.shrink();
+                    }
+                    return Padding(
+                      padding: const EdgeInsets.only(right: 6),
+                      child: Text(
+                        value.toInt().toString(),
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: scheme.onSurfaceVariant,
+                          fontFeatures: const <FontFeature>[
+                            FontFeature.tabularFigures(),
+                          ],
+                        ),
+                        textAlign: TextAlign.right,
+                      ),
+                    );
+                  },
+                ),
+              ),
+              bottomTitles: AxisTitles(
+                sideTitles: SideTitles(
+                  showTitles: true,
+                  reservedSize: 26,
+                  getTitlesWidget: (value, meta) {
+                    final index = value.toInt();
+                    if (index < 1 || index > data.length || index != value) {
+                      return const SizedBox.shrink();
+                    }
+                    return Padding(
+                      padding: const EdgeInsets.only(top: 6),
+                      child: Text(
+                        '$index',
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: scheme.onSurfaceVariant,
+                          fontSize: 10,
                         ),
                       ),
-                  ],
-                );
-              },
-            ),
-          ),
-          gridData: FlGridData(
-            show: true,
-            drawVerticalLine: false,
-            horizontalInterval: horizontalStep,
-            getDrawingHorizontalLine: (value) => FlLine(
-              // 网格线只是读数的辅助，压淡一档 —— 它比柱子显眼时，图的重点是错的。
-              color: scheme.outlineVariant.withValues(alpha: 0.35),
-              strokeWidth: 1,
-              dashArray: const <int>[4, 4],
-            ),
-          ),
-          borderData: FlBorderData(show: false),
-          titlesData: FlTitlesData(
-            topTitles: const AxisTitles(),
-            rightTitles: const AxisTitles(),
-            leftTitles: AxisTitles(
-              sideTitles: SideTitles(
-                showTitles: true,
-                reservedSize: 34,
-                interval: horizontalStep,
-                getTitlesWidget: (value, meta) {
-                  // 超过实量程（niceMax）的刻度一律不画：maxY 高出 niceMax 的那一截
-                  // 是给柱顶数字留的位置，在那儿标一个刻度会让人误以为量程更大
-                  // （35 条的数据出现一个「40」的刻度，读起来很怪）。
-                  if (value < 0 || value > niceMax) {
-                    return const SizedBox.shrink();
-                  }
-                  return Padding(
-                    padding: const EdgeInsets.only(right: 6),
-                    child: Text(
-                      value.toInt().toString(),
-                      style: theme.textTheme.labelSmall?.copyWith(
-                        color: scheme.onSurfaceVariant,
-                        fontFeatures: const <FontFeature>[
-                          FontFeature.tabularFigures(),
-                        ],
-                      ),
-                      textAlign: TextAlign.right,
-                    ),
-                  );
-                },
-              ),
-            ),
-            bottomTitles: AxisTitles(
-              sideTitles: SideTitles(
-                showTitles: true,
-                reservedSize: 26,
-                getTitlesWidget: (value, meta) {
-                  final index = value.toInt();
-                  if (index < 1 || index > data.length || index != value) {
-                    return const SizedBox.shrink();
-                  }
-                  return Padding(
-                    padding: const EdgeInsets.only(top: 6),
-                    child: Text(
-                      '$index',
-                      style: theme.textTheme.labelSmall?.copyWith(
-                        color: scheme.onSurfaceVariant,
-                        fontSize: 10,
-                      ),
-                    ),
-                  );
-                },
-              ),
-            ),
-          ),
-          barGroups: data
-              .map(
-                (stat) => BarChartGroupData(
-                  x: stat.month,
-                  barsSpace: 0,
-                  barRods: <BarChartRodData>[
-                    _rod(stat, scheme, tokens, labelStyle),
-                  ],
+                    );
+                  },
                 ),
-              )
-              .toList(),
+              ),
+            ),
+            barGroups: data
+                .map(
+                  (stat) => BarChartGroupData(
+                    x: stat.month,
+                    barsSpace: 0,
+                    barRods: <BarChartRodData>[
+                      _rod(stat, scheme, tokens, labelStyle, t),
+                    ],
+                  ),
+                )
+                .toList(),
+          ),
+          duration: VestigeMotion.slow,
+          curve: VestigeMotion.curve,
         ),
-        duration: const Duration(milliseconds: 420),
-        curve: Curves.easeOutCubic,
       ),
     );
   }
 
   /// 柱顶圆角。半径取 8 = 柱宽 16 的一半：这是「顶部看起来还是圆角」的最大值，
   /// 再大柱子就变成胶囊头了。8 也落在卡片那套 12/16/24 圆角刻度的弧线族里。
-  static const BorderRadius _rodTop =
-      BorderRadius.vertical(top: Radius.circular(8));
+  static const BorderRadius _rodTop = BorderRadius.vertical(
+    top: Radius.circular(8),
+  );
 
   BarChartRodData _rod(
     MonthStat stat,
     ColorScheme scheme,
     VestigeTokens tokens,
     TextStyle? labelStyle,
+    double t,
   ) {
     if (stat.count == 0) {
       // 空月份给一根灰色小墩子，也**不加数字**：什么都记的月份本来就没有数可报，
@@ -181,10 +188,10 @@ class MonthlyBarChart extends StatelessWidget {
       );
     }
 
-    final recorded = stat.count - stat.backfilled;
+    final recorded = (stat.count - stat.backfilled) * t;
 
     return BarChartRodData(
-      toY: stat.count.toDouble(),
+      toY: stat.count * t,
       width: 16,
       borderRadius: _rodTop,
       color: scheme.primary,
@@ -195,14 +202,9 @@ class MonthlyBarChart extends StatelessWidget {
         offset: const Offset(0, 6),
       ),
       rodStackItems: <BarChartRodStackItem>[
-        if (recorded > 0)
-          BarChartRodStackItem(0, recorded.toDouble(), scheme.primary),
+        if (recorded > 0) BarChartRodStackItem(0, recorded, scheme.primary),
         if (stat.backfilled > 0)
-          BarChartRodStackItem(
-            recorded.toDouble(),
-            stat.count.toDouble(),
-            tokens.backfill,
-          ),
+          BarChartRodStackItem(recorded, stat.count * t, tokens.backfill),
       ],
     );
   }

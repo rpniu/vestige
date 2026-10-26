@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:vestige/app/motion.dart';
 import 'package:vestige/app/theme.dart';
 import 'package:vestige/data/database/app_database.dart';
 import 'package:vestige/domain/day_util.dart';
+import 'package:vestige/domain/duration_format.dart';
 import 'package:vestige/presentation/widgets/row_metrics.dart';
 
 /// 单条记录的卡片。
@@ -65,88 +67,109 @@ class RecordCard extends StatelessWidget {
 
     // 卡片走实色容器面，和页面底拉开一档明度差 —— 以前是
     // `surfaceContainerHighest @ 45%` 叠出来的近底色，卡片只能靠 1px 描边站立。
+    // 选中态的底色切换用 [TweenAnimationBuilder] 做 fast 档过渡：多选模式下
+    // 蓝底柔和浮现，而不是跳变。TweenAnimationBuilder 只在 tween 的 end 变化时
+    // 才重新插值，普通重建不会触发多余的动画。
     final background = selected ? scheme.primaryContainer : surfaces.card;
 
-    return Card(
-      elevation: selected ? 2 : 0.8,
-      shadowColor: scheme.shadow.withValues(alpha: selected ? 0.14 : 0.05),
-      color: background,
-      // 显式写零边距：行高由外部声明，卡片必须**正好**填满这个高度。
-      // 主题里虽然也配了 `cardTheme.margin = zero`，但这里不依赖它 ——
-      // 哪天主题改回去，卡片高度和声明行高就会错开，变成 1px 缝或溢出。
-      margin: EdgeInsets.zero,
-      shape: RoundedRectangleBorder(
-        borderRadius: VestigeRadius.mediumAll,
-        side: selected
-            ? BorderSide(color: scheme.primary, width: 1.6)
-            : BorderSide(color: surfaces.border, width: 0.8),
-      ),
-      child: InkWell(
-        onTap: onTap,
-        onLongPress: onLongPress,
-        borderRadius: VestigeRadius.mediumAll,
-        child: Padding(
-          // 左右比上下多 4：内容不贴边，卡片在视觉上更「稳」；
-          // 上下必须凑够 VestigeRowMetrics.cardPadding（行高的组成部分），左右自由。
-          padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
-          child: Row(
-            // 卡片高度是给定的：内容整体竖直居中，高度有富余时上下对称留白。
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: <Widget>[
-              _TimeBadge(
-                record: record,
-                showDay: showDay,
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: <Widget>[
-                    if (hasTitle) ...<Widget>[
+    return TweenAnimationBuilder<Color?>(
+      tween: ColorTween(end: background),
+      duration: VestigeMotion.fast,
+      curve: VestigeMotion.curve,
+      builder: (context, animatedColor, _) => Card(
+        elevation: selected ? 2 : 0.8,
+        shadowColor: scheme.shadow.withValues(alpha: selected ? 0.14 : 0.05),
+        color: animatedColor,
+        // 显式写零边距：行高由外部声明，卡片必须**正好**填满这个高度。
+        // 主题里虽然也配了 `cardTheme.margin = zero`，但这里不依赖它 ——
+        // 哪天主题改回去，卡片高度和声明行高就会错开，变成 1px 缝或溢出。
+        margin: EdgeInsets.zero,
+        shape: RoundedRectangleBorder(
+          borderRadius: VestigeRadius.mediumAll,
+          side: selected
+              ? BorderSide(color: scheme.primary, width: 1.6)
+              : BorderSide(color: surfaces.border, width: 0.8),
+        ),
+        child: InkWell(
+          onTap: onTap,
+          onLongPress: onLongPress,
+          borderRadius: VestigeRadius.mediumAll,
+          child: Padding(
+            // 左右比上下多 4：内容不贴边，卡片在视觉上更「稳」；
+            // 上下必须凑够 VestigeRowMetrics.cardPadding（行高的组成部分），左右自由。
+            padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+            child: Row(
+              // 卡片高度是给定的：内容整体竖直居中，高度有富余时上下对称留白。
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: <Widget>[
+                _TimeBadge(record: record, showDay: showDay),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      if (hasTitle) ...<Widget>[
+                        Text(
+                          title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: theme.textTheme.titleSmall?.copyWith(
+                            fontWeight: FontWeight.w800,
+                            color: selected
+                                ? scheme.onPrimaryContainer
+                                : scheme.onSurface,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                      ],
                       Text(
-                        title,
-                        maxLines: 1,
+                        record.content,
+                        // 两档封顶，保证「标题 + 正文」的总行数不超过 VestigeRowMetrics.cardTextSlot
+                        // 那条预算（有标题时正文 1 行，没标题时正文 2 行）。
+                        maxLines: hasTitle ? 1 : 2,
                         overflow: TextOverflow.ellipsis,
-                        style: theme.textTheme.titleSmall?.copyWith(
-                          fontWeight: FontWeight.w800,
+                        style: theme.textTheme.bodyMedium?.copyWith(
                           color: selected
                               ? scheme.onPrimaryContainer
                               : scheme.onSurface,
+                          height: 1.35,
                         ),
                       ),
-                      const SizedBox(height: 2),
+                      if (meta != null) ...<Widget>[
+                        const SizedBox(height: 3),
+                        meta,
+                      ],
                     ],
-                    Text(
-                      record.content,
-                      // 两档封顶，保证「标题 + 正文」的总行数不超过 VestigeRowMetrics.cardTextSlot
-                      // 那条预算（有标题时正文 1 行，没标题时正文 2 行）。
-                      maxLines: hasTitle ? 1 : 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: theme.textTheme.bodyMedium?.copyWith(
-                        color: selected
-                            ? scheme.onPrimaryContainer
-                            : scheme.onSurface,
-                        height: 1.35,
-                      ),
-                    ),
-                    if (meta != null) ...<Widget>[
-                      const SizedBox(height: 3),
-                      meta,
-                    ],
-                  ],
-                ),
-              ),
-              if (selectionMode)
-                Padding(
-                  padding: const EdgeInsets.only(left: 6),
-                  child: Icon(
-                    selected ? Icons.check_circle : Icons.radio_button_unchecked,
-                    size: 20,
-                    color: selected ? scheme.primary : scheme.outline,
                   ),
                 ),
-            ],
+                if (selectionMode)
+                  Padding(
+                    padding: const EdgeInsets.only(left: 6),
+                    // 勾选图标用 [AnimatedSwitcher] 做 fast 档交叉淡入：
+                    // 圆圈 → 勾的切换柔和出现，且两个状态的占位一致（20×20），
+                    // 不会引起行内布局抖动。
+                    child: AnimatedSwitcher(
+                      duration: VestigeMotion.fast,
+                      switchInCurve: VestigeMotion.curve,
+                      switchOutCurve: VestigeMotion.curve.flipped,
+                      transitionBuilder: (child, animation) => FadeTransition(
+                        opacity: animation,
+                        child: ScaleTransition(scale: animation, child: child),
+                      ),
+                      child: Icon(
+                        selected
+                            ? Icons.check_circle_rounded
+                            : Icons.radio_button_unchecked,
+                        // key 换了才会触发 Switcher 的交叉过渡
+                        key: ValueKey<bool>(selected),
+                        size: 20,
+                        color: selected ? scheme.primary : scheme.outline,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
           ),
         ),
       ),
@@ -190,7 +213,28 @@ class RecordCard extends StatelessWidget {
                 style: TextStyle(color: tokens.backfill),
               ),
           ],
-          if (backfilled && tags.isNotEmpty) const TextSpan(text: '   '),
+          if (backfilled && (record.durationS != null || tags.isNotEmpty))
+            const TextSpan(text: '   '),
+          // 时长小标签：主色 + 表盘，与补记标记（琥珀）、标签（灰）拉开三档
+          if (record.durationS != null) ...<InlineSpan>[
+            WidgetSpan(
+              alignment: PlaceholderAlignment.middle,
+              child: Icon(
+                Icons.timelapse_outlined,
+                size: 12,
+                color: scheme.primary,
+              ),
+            ),
+            TextSpan(
+              text: ' ${durationLabelCompact(record.durationS!)}',
+              style: TextStyle(
+                color: scheme.primary,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
+          if (record.durationS != null && tags.isNotEmpty)
+            const TextSpan(text: '   '),
           if (tags.isNotEmpty)
             TextSpan(
               text: tags.map((String t) => '#$t').join('  '),
@@ -220,10 +264,7 @@ class RecordCard extends StatelessWidget {
 /// 注意 [showDay] 打开时徽标是两行（50 高），比紧凑档的内高还大 ——
 /// 所以它只给**不声明行高**的列表用（回收站），首页不要传。
 class _TimeBadge extends StatelessWidget {
-  const _TimeBadge({
-    required this.record,
-    required this.showDay,
-  });
+  const _TimeBadge({required this.record, required this.showDay});
 
   final RecordEntity record;
   final bool showDay;
@@ -250,7 +291,9 @@ class _TimeBadge extends StatelessWidget {
       width: 52,
       padding: const EdgeInsets.symmetric(vertical: 7),
       decoration: BoxDecoration(
-        color: isBackfilled ? tokens.backfillContainer : scheme.primaryContainer,
+        color: isBackfilled
+            ? tokens.backfillContainer
+            : scheme.primaryContainer,
         borderRadius: VestigeRadius.insetAll,
         border: Border.all(color: borderColor, width: 0.8),
       ),
@@ -260,9 +303,9 @@ class _TimeBadge extends StatelessWidget {
           _oneLine(
             timeLabel(record.recordedAt),
             Theme.of(context).textTheme.labelMedium?.copyWith(
-                  fontWeight: FontWeight.w800,
-                  color: onBadge,
-                ),
+              fontWeight: FontWeight.w800,
+              color: onBadge,
+            ),
           ),
           if (showDay) ...<Widget>[
             const SizedBox(height: 2),
@@ -278,9 +321,9 @@ class _TimeBadge extends StatelessWidget {
 
   /// 单行文本：放不下就等比缩小，不换行。这样高度恒等于一行，不会随字号/字体变。
   Widget _oneLine(String text, TextStyle? style) => FittedBox(
-        fit: BoxFit.scaleDown,
-        child: Text(text, maxLines: 1, softWrap: false, style: style),
-      );
+    fit: BoxFit.scaleDown,
+    child: Text(text, maxLines: 1, softWrap: false, style: style),
+  );
 }
 
 /// 「这张卡片长什么形状」的判定 —— 卡片渲染与首页行高**共用这一份**。
@@ -299,8 +342,8 @@ extension RecordCardShapeX on RecordEntity {
   /// 有标题。
   bool get hasCardTitle => cardTitle != null;
 
-  /// 有元信息行：补记标记或标签。
-  bool get hasCardMeta => isBackfilled || tags.isNotEmpty;
+  /// 有元信息行：补记标记、时长或标签。
+  bool get hasCardMeta => isBackfilled || tags.isNotEmpty || durationS != null;
 
   /// 只有正文、没有标题也没有元信息 → 行高可以走紧凑档。
   bool get isDenseCard => !hasCardTitle && !hasCardMeta;

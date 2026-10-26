@@ -48,12 +48,14 @@ class RecordRepository {
   ///
   /// [recordedAt] 是这条记录「属于」的日期，可传过去的时间实现补记；
   /// 不传则默认当前时刻。`createdAt` 恒为当前时刻，由数据库 clientDefault 写入。
+  /// [durationSec] 可选时长（**秒**），null = 没记时长。
   Future<void> addRecord({
     required String content,
     String? title,
     List<String> tags = const [],
     DateTime? recordedAt,
     String? id,
+    int? durationSec,
   }) {
     final now = DateTime.now();
     return _dao.insert(
@@ -64,11 +66,16 @@ class RecordRepository {
         tags: tags,
         recordedAt: Value(recordedAt ?? now),
         updatedAt: Value(now),
+        durationS: Value(durationSec),
       ),
     );
   }
 
   /// 更新一条记录。`createdAt` 保持不变（除非显式传 [createdAt]，仅 CSV 导入用）。
+  ///
+  /// 时长参数区分三个态：[durationSec] 非 null = 设成该值；[clearDuration] 为
+  /// true = 抹掉（写 null）；两者都不给 = **不动时长**。编辑页据此精确表达
+  /// 「没填」和「清空」的区别，一次 UPDATE 写完，不拆两次调用。
   Future<int> updateRecord({
     required String id,
     required String content,
@@ -76,7 +83,10 @@ class RecordRepository {
     List<String> tags = const [],
     DateTime? recordedAt,
     DateTime? createdAt,
+    int? durationSec,
+    bool clearDuration = false,
   }) {
+    assert(!clearDuration || durationSec == null, '设值与清空不能同时给');
     final now = DateTime.now();
     return _dao.replace(
       RecordsCompanion(
@@ -87,6 +97,11 @@ class RecordRepository {
         recordedAt: recordedAt == null ? const Value.absent() : Value(recordedAt),
         createdAt: createdAt == null ? const Value.absent() : Value(createdAt),
         updatedAt: Value(now),
+        durationS: clearDuration
+            ? const Value(null)
+            : durationSec == null
+                ? const Value.absent()
+                : Value(durationSec),
       ),
     );
   }
@@ -264,6 +279,7 @@ class RecordRepository {
         createdAt: Value(r.createdAt),
         updatedAt: Value(r.updatedAt),
         deleted: Value(r.deleted),
+        durationS: Value(r.durationS),
       );
 
   static String? _nullIfBlank(String? s) {

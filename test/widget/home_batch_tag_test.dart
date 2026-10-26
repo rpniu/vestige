@@ -145,7 +145,7 @@ void main() {
     expect(
       tester
           .widget<IconButton>(
-            find.widgetWithIcon(IconButton, Icons.sell_outlined),
+            find.widgetWithIcon(IconButton, Icons.sell_rounded),
           )
           .onPressed,
       isNull,

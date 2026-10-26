@@ -111,9 +111,9 @@ void main() {
           ),
         )
         .onPressed;
-    expect(actionOf(Icons.restore), isNull, reason: '0 选中时「恢复」应置灰');
+    expect(actionOf(Icons.restore_rounded), isNull, reason: '0 选中时「恢复」应置灰');
     expect(
-      actionOf(Icons.delete_forever_outlined),
+      actionOf(Icons.delete_forever_rounded),
       isNull,
       reason: '0 选中时「彻底删除」应置灰',
     );

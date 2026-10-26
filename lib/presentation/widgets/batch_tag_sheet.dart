@@ -79,7 +79,7 @@ class _BatchTagSheetState extends ConsumerState<BatchTagSheet> {
           children: <Widget>[
             Text(
               '给选中的 ${widget.count} 条打标签',
-              style: theme.textTheme.titleSmall?.copyWith(
+              style: theme.textTheme.titleMedium?.copyWith(
                 fontWeight: FontWeight.w800,
               ),
             ),
@@ -133,7 +133,7 @@ class _BatchTagSheetState extends ConsumerState<BatchTagSheet> {
                 Expanded(
                   child: OutlinedButton.icon(
                     onPressed: _picked.isEmpty ? null : () => _done(adding: false),
-                    icon: const Icon(Icons.remove_circle_outline, size: 18),
+                    icon: const Icon(Icons.remove_circle_outline_rounded, size: 18),
                     label: const Text('去掉这些'),
                   ),
                 ),
@@ -141,7 +141,7 @@ class _BatchTagSheetState extends ConsumerState<BatchTagSheet> {
                 Expanded(
                   child: FilledButton.icon(
                     onPressed: _canAct ? () => _done(adding: true) : null,
-                    icon: const Icon(Icons.add_circle_outline, size: 18),
+                    icon: const Icon(Icons.add_circle_outline_rounded, size: 18),
                     label: const Text('加上这些'),
                   ),
                 ),

@@ -94,16 +94,8 @@ class VestigeSurfaces extends ThemeExtension<VestigeSurfaces> {
     inset: Color(0xFFF1F4FA),
     border: Color(0xFFDDE1EA),
     cardShadow: <BoxShadow>[
-      BoxShadow(
-        color: Color(0x08152540),
-        blurRadius: 12,
-        offset: Offset(0, 4),
-      ),
-      BoxShadow(
-        color: Color(0x04152540),
-        blurRadius: 3,
-        offset: Offset(0, 1),
-      ),
+      BoxShadow(color: Color(0x08152540), blurRadius: 12, offset: Offset(0, 4)),
+      BoxShadow(color: Color(0x04152540), blurRadius: 3, offset: Offset(0, 1)),
     ],
   );
 
@@ -114,14 +106,13 @@ class VestigeSurfaces extends ThemeExtension<VestigeSurfaces> {
     Color? inset,
     Color? border,
     List<BoxShadow>? cardShadow,
-  }) =>
-      VestigeSurfaces(
-        base: base ?? this.base,
-        card: card ?? this.card,
-        inset: inset ?? this.inset,
-        border: border ?? this.border,
-        cardShadow: cardShadow ?? this.cardShadow,
-      );
+  }) => VestigeSurfaces(
+    base: base ?? this.base,
+    card: card ?? this.card,
+    inset: inset ?? this.inset,
+    border: border ?? this.border,
+    cardShadow: cardShadow ?? this.cardShadow,
+  );
 
   @override
   VestigeSurfaces lerp(ThemeExtension<VestigeSurfaces>? other, double t) {
@@ -131,7 +122,8 @@ class VestigeSurfaces extends ThemeExtension<VestigeSurfaces> {
       card: Color.lerp(card, other.card, t)!,
       inset: Color.lerp(inset, other.inset, t)!,
       border: Color.lerp(border, other.border, t)!,
-      cardShadow: BoxShadow.lerpList(cardShadow, other.cardShadow, t) ?? cardShadow,
+      cardShadow:
+          BoxShadow.lerpList(cardShadow, other.cardShadow, t) ?? cardShadow,
     );
   }
 }
@@ -165,22 +157,27 @@ class VestigeTokens extends ThemeExtension<VestigeTokens> {
     Color? backfill,
     Color? backfillContainer,
     Color? onBackfillContainer,
-  }) =>
-      VestigeTokens(
-        backfill: backfill ?? this.backfill,
-        backfillContainer: backfillContainer ?? this.backfillContainer,
-        onBackfillContainer: onBackfillContainer ?? this.onBackfillContainer,
-      );
+  }) => VestigeTokens(
+    backfill: backfill ?? this.backfill,
+    backfillContainer: backfillContainer ?? this.backfillContainer,
+    onBackfillContainer: onBackfillContainer ?? this.onBackfillContainer,
+  );
 
   @override
   VestigeTokens lerp(ThemeExtension<VestigeTokens>? other, double t) {
     if (other is! VestigeTokens) return this;
     return VestigeTokens(
       backfill: Color.lerp(backfill, other.backfill, t)!,
-      backfillContainer:
-          Color.lerp(backfillContainer, other.backfillContainer, t)!,
-      onBackfillContainer:
-          Color.lerp(onBackfillContainer, other.onBackfillContainer, t)!,
+      backfillContainer: Color.lerp(
+        backfillContainer,
+        other.backfillContainer,
+        t,
+      )!,
+      onBackfillContainer: Color.lerp(
+        onBackfillContainer,
+        other.onBackfillContainer,
+        t,
+      )!,
     );
   }
 }
@@ -324,16 +321,8 @@ const VestigeSurfaces _surfacesBlueLight = VestigeSurfaces(
   inset: Color(0xFFF1F4FA),
   border: Color(0xFFDDE1EA),
   cardShadow: <BoxShadow>[
-    BoxShadow(
-      color: Color(0x0A152540),
-      blurRadius: 10,
-      offset: Offset(0, 3),
-    ),
-    BoxShadow(
-      color: Color(0x05152540),
-      blurRadius: 3,
-      offset: Offset(0, 1),
-    ),
+    BoxShadow(color: Color(0x0A152540), blurRadius: 10, offset: Offset(0, 3)),
+    BoxShadow(color: Color(0x05152540), blurRadius: 3, offset: Offset(0, 1)),
   ],
 );
 
@@ -343,11 +332,7 @@ const VestigeSurfaces _surfacesBlueDark = VestigeSurfaces(
   inset: Color(0xFF23272F),
   border: Color(0xFF2E333C),
   cardShadow: <BoxShadow>[
-    BoxShadow(
-      color: Color(0x3D000000),
-      blurRadius: 12,
-      offset: Offset(0, 4),
-    ),
+    BoxShadow(color: Color(0x3D000000), blurRadius: 12, offset: Offset(0, 4)),
   ],
 );
 
@@ -357,16 +342,8 @@ const VestigeSurfaces _surfacesSageLight = VestigeSurfaces(
   inset: Color(0xFFF3F6EF),
   border: Color(0xFFDDE3D6),
   cardShadow: <BoxShadow>[
-    BoxShadow(
-      color: Color(0x0D2B3D2C),
-      blurRadius: 10,
-      offset: Offset(0, 3),
-    ),
-    BoxShadow(
-      color: Color(0x052B3D2C),
-      blurRadius: 3,
-      offset: Offset(0, 1),
-    ),
+    BoxShadow(color: Color(0x0D2B3D2C), blurRadius: 10, offset: Offset(0, 3)),
+    BoxShadow(color: Color(0x052B3D2C), blurRadius: 3, offset: Offset(0, 1)),
   ],
 );
 
@@ -376,11 +353,7 @@ const VestigeSurfaces _surfacesSageDark = VestigeSurfaces(
   inset: Color(0xFF272C23),
   border: Color(0xFF343B2F),
   cardShadow: <BoxShadow>[
-    BoxShadow(
-      color: Color(0x3D000000),
-      blurRadius: 12,
-      offset: Offset(0, 4),
-    ),
+    BoxShadow(color: Color(0x3D000000), blurRadius: 12, offset: Offset(0, 4)),
   ],
 );
 
@@ -390,13 +363,21 @@ VestigeSurfaces vestigeSurfaces(
   Brightness brightness,
 ) {
   return switch (variant) {
-    AppThemeVariant.defaultBlue => brightness == Brightness.dark
-        ? _surfacesBlueDark
-        : _surfacesBlueLight,
-    AppThemeVariant.sageGreen => brightness == Brightness.dark
-        ? _surfacesSageDark
-        : _surfacesSageLight,
+    AppThemeVariant.defaultBlue =>
+      brightness == Brightness.dark ? _surfacesBlueDark : _surfacesBlueLight,
+    AppThemeVariant.sageGreen =>
+      brightness == Brightness.dark ? _surfacesSageDark : _surfacesSageLight,
   };
+}
+
+/// 数字文本的排版扩展：等宽数字（tabular figures）。
+///
+/// 每个数字等宽后，跳动的数字（计时钟面、计数动画、统计切换窗口）不会
+/// 因字形宽度不同而左右抖动。凡「会变的数字」都应套上 [tabular]。
+extension VestigeNumTextX on TextStyle {
+  /// 返回带等宽数字特性的样式副本。
+  TextStyle get tabular =>
+      copyWith(fontFeatures: const <FontFeature>[FontFeature.tabularFigures()]);
 }
 
 /// 构建主题。圆角、子主题统一在这里配，页面里就不用到处写 shape。

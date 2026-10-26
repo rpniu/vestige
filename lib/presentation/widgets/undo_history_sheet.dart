@@ -150,71 +150,69 @@ class _UndoHistorySheetState extends ConsumerState<UndoHistorySheet> {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
       child: FutureBuilder<List<UndoEntryEntity>>(
-          future: _future,
-          builder: (
-            BuildContext context,
-            AsyncSnapshot<List<UndoEntryEntity>> snap,
-          ) {
-            final entries = snap.data;
-            final hasEntries = entries != null && entries.isNotEmpty;
+        future: _future,
+        builder:
+            (BuildContext context, AsyncSnapshot<List<UndoEntryEntity>> snap) {
+              final entries = snap.data;
+              final hasEntries = entries != null && entries.isNotEmpty;
 
-            return Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                // 标题行 = 弹层统一语言：左标题 + 右侧动作
-                Row(
-                  children: <Widget>[
-                    Text(
-                      '操作历史',
-                      style: theme.textTheme.titleSmall?.copyWith(
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                    const Spacer(),
-                    if (hasEntries)
-                      TextButton(
-                        onPressed: _confirmClearAll,
-                        style: TextButton.styleFrom(
-                          foregroundColor: scheme.error,
-                          visualDensity: VisualDensity.compact,
+              return Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  // 标题行 = 弹层统一语言：左标题 + 右侧动作
+                  Row(
+                    children: <Widget>[
+                      Text(
+                        '操作历史',
+                        style: theme.textTheme.titleSmall?.copyWith(
+                          fontWeight: FontWeight.w800,
                         ),
-                        child: const Text('清空'),
                       ),
-                  ],
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  '最近 $kUndoHistoryLimit 步可回退 · 点某一步会连同它之后的操作'
-                  '一起回退；删除只是抹掉回退点，记录数据不受影响',
-                  style: theme.textTheme.labelSmall?.copyWith(
-                    color: scheme.onSurfaceVariant,
+                      const Spacer(),
+                      if (hasEntries)
+                        TextButton(
+                          onPressed: _confirmClearAll,
+                          style: TextButton.styleFrom(
+                            foregroundColor: scheme.error,
+                            visualDensity: VisualDensity.compact,
+                          ),
+                          child: const Text('清空'),
+                        ),
+                    ],
                   ),
-                ),
-                const SizedBox(height: 12),
-                // 列表不写死高度：外层 Column 一旦含有 flex 子项，就会先满足
-                // 非 flex 子项、再把剩余高度分给 flex 的这一个 —— 整页下
-                // Scaffold body 给的是紧约束，于是列表自动吃满剩下的整屏高度。
-                //
-                // 这里不用 Expanded：Expanded 的 fit 是 tight，在外层高度无界时
-                // 直接抛错；用 Flexible（loose）则在两种承载下都成立。
-                //
-                // 弹层时期这里是「定高 = 屏高 × 0.8 + shrinkWrap 列表」——
-                // 弹层高度由内容撑出（无界），只有 shrinkWrap 能定高。换成整页后
-                // 父级高度确定，把空间让给列表才合理，于是 _buildList 里也去掉了
-                // shrinkWrap：普通 ListView 在有界约束下自己就能滚，且更省。
-                Flexible(
-                  // hasError 必须先于「data == null」判定：Future 出错时
-                  // data 同样是 null，先判空会把错误吞成无限转圈 ——
-                  // 用户看到的就是一个永远停不下来的加载圈。
-                  child: snap.hasError
-                      ? _buildError(theme, scheme, snap.error)
-                      : _buildList(entries, theme, scheme),
-                ),
-              ],
-            );
-          },
-        ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '最近 $kUndoHistoryLimit 步可回退 · 点某一步会连同它之后的操作'
+                    '一起回退；删除只是抹掉回退点，记录数据不受影响',
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  // 列表不写死高度：外层 Column 一旦含有 flex 子项，就会先满足
+                  // 非 flex 子项、再把剩余高度分给 flex 的这一个 —— 整页下
+                  // Scaffold body 给的是紧约束，于是列表自动吃满剩下的整屏高度。
+                  //
+                  // 这里不用 Expanded：Expanded 的 fit 是 tight，在外层高度无界时
+                  // 直接抛错；用 Flexible（loose）则在两种承载下都成立。
+                  //
+                  // 弹层时期这里是「定高 = 屏高 × 0.8 + shrinkWrap 列表」——
+                  // 弹层高度由内容撑出（无界），只有 shrinkWrap 能定高。换成整页后
+                  // 父级高度确定，把空间让给列表才合理，于是 _buildList 里也去掉了
+                  // shrinkWrap：普通 ListView 在有界约束下自己就能滚，且更省。
+                  Flexible(
+                    // hasError 必须先于「data == null」判定：Future 出错时
+                    // data 同样是 null，先判空会把错误吞成无限转圈 ——
+                    // 用户看到的就是一个永远停不下来的加载圈。
+                    child: snap.hasError
+                        ? _buildError(theme, scheme, snap.error)
+                        : _buildList(entries, theme, scheme),
+                  ),
+                ],
+              );
+            },
+      ),
     );
   }
 
@@ -297,6 +295,9 @@ class _UndoHistorySheetState extends ConsumerState<UndoHistorySheet> {
         return ListTile(
           dense: true,
           contentPadding: EdgeInsets.zero,
+          // 行首按操作类型给语义色小方块：删除类走 error、其余走主色。
+          // 扫一眼就能定位要回退的那一步，不用逐行读标题。
+          leading: _actionBadge(e.label, scheme, theme),
           title: Text(
             e.label,
             style: theme.textTheme.bodyMedium?.copyWith(
@@ -315,7 +316,7 @@ class _UndoHistorySheetState extends ConsumerState<UndoHistorySheet> {
             mainAxisSize: MainAxisSize.min,
             children: <Widget>[
               IconButton(
-                icon: const Icon(Icons.delete_outline, size: 20),
+                icon: const Icon(Icons.delete_outline_rounded, size: 20),
                 tooltip: '删除这条历史',
                 visualDensity: VisualDensity.compact,
                 onPressed: () => _deleteEntry(e),
@@ -328,6 +329,43 @@ class _UndoHistorySheetState extends ConsumerState<UndoHistorySheet> {
           ),
         );
       },
+    );
+  }
+
+  /// 操作类型徽标：32px 圆角小方块 + 类型图标。
+  ///
+  /// 类型按 [UndoEntryEntity.label] 的前缀判断（label 是各操作自己写入的
+  /// 文案：移入回收站 / 彻底删除 / 清空回收站 / 日期前移(后移) 1 天 / 批量改标签）。
+  /// 语义色沿用现有体系：删除类 error，其余主色；识别不出走中性的
+  /// history 图标兜底 —— 新增操作类型忘了配图标也不会崩。
+  Widget _actionBadge(String label, ColorScheme scheme, ThemeData theme) {
+    final (IconData icon, Color color) = switch (label) {
+      final String l when l.startsWith('移入回收站') || l.startsWith('彻底删除') => (
+        Icons.delete_outline_rounded,
+        scheme.error,
+      ),
+      final String l when l.startsWith('清空回收站') => (
+        Icons.delete_sweep_rounded,
+        scheme.error,
+      ),
+      final String l when l.startsWith('日期') => (
+        Icons.date_range_rounded,
+        scheme.primary,
+      ),
+      final String l when l.startsWith('批量改标签') => (
+        Icons.sell_rounded,
+        scheme.primary,
+      ),
+      _ => (Icons.history_rounded, scheme.primary),
+    };
+    return Container(
+      width: 32,
+      height: 32,
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Icon(icon, size: 18, color: color),
     );
   }
 }

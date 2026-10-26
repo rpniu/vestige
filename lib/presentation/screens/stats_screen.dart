@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:vestige/app/motion.dart';
 import 'package:vestige/app/theme.dart';
+import 'package:vestige/domain/duration_format.dart';
 import 'package:vestige/presentation/providers/records_provider.dart';
 import 'package:vestige/presentation/widgets/center_dialog.dart';
 import 'package:vestige/presentation/widgets/monthly_bar_chart.dart';
@@ -102,9 +104,45 @@ class StatsScreen extends ConsumerWidget {
             onWindowChanged: (int days) =>
                 ref.read(insightWindowProvider.notifier).select(days),
           ),
+          // 时长卡只在窗口内真的有时长数据时出现 —— 从不填时长的用户
+          // 不该在统计页多看到一张全是 0 的卡。
+          if (_windowDurationStats(series) case (
+            final total,
+            final max,
+          )) ...<Widget>[
+            const SizedBox(height: 16),
+            _DurationCard(
+              windowDays: series.length,
+              totalSeconds: total,
+              maxSeconds: max,
+            ),
+          ],
         ],
       ),
     );
+  }
+
+  /// 窗口内的时长汇总：`(总秒, 最长单条秒)`。
+  ///
+  /// 窗口内一条带时长的记录都没有时返回 null（整张卡不渲染）。
+  /// 时长跟条数同一口径 —— 按业务日期落在它归属的那一天。
+  ///
+  /// 不提供「日均时长」（2026-10-22 用户要求删除）：只填时长的那部分记录
+  /// 除以整个窗口天数，得到的数往往小到没有信息量（例如几分钟摊到 30 天
+  /// 只剩个位数秒），容易被误读成「数据错了」。
+  static (int, int)? _windowDurationStats(List<DayStat> series) {
+    var total = 0;
+    var max = 0;
+    for (final day in series) {
+      for (final r in day.records) {
+        final d = r.durationS;
+        if (d == null) continue;
+        total += d;
+        if (d > max) max = d;
+      }
+    }
+    if (total == 0) return null;
+    return (total, max);
   }
 }
 
@@ -219,11 +257,7 @@ class _TagBars extends StatelessWidget {
 
 /// 一行：标签名（定宽）+ 比例条 + 次数。
 class _TagBar extends StatelessWidget {
-  const _TagBar({
-    required this.tag,
-    required this.count,
-    required this.ratio,
-  });
+  const _TagBar({required this.tag, required this.count, required this.ratio});
 
   final String tag;
   final int count;
@@ -289,13 +323,13 @@ class _TagBar extends StatelessWidget {
   /// stop 指示点 + 圆角收尾那套新样式，画出来读作「进度」；
   /// 这里要表达的是「占比」，多出来的装饰反而干扰。
   Widget _bar(Color color, double width) => Container(
-        width: width,
-        height: _barHeight,
-        decoration: BoxDecoration(
-          color: color,
-          borderRadius: VestigeRadius.pillAll,
-        ),
-      );
+    width: width,
+    height: _barHeight,
+    decoration: BoxDecoration(
+      color: color,
+      borderRadius: VestigeRadius.pillAll,
+    ),
+  );
 }
 
 class _SectionCard extends StatelessWidget {
@@ -433,7 +467,7 @@ class _YearPicker extends StatelessWidget {
               ),
               const SizedBox(width: 2),
               Icon(
-                Icons.expand_more,
+                Icons.expand_more_rounded,
                 size: 18,
                 color: scheme.onSurfaceVariant,
               ),
@@ -448,11 +482,8 @@ class _YearPicker extends StatelessWidget {
     final picked = await showVestigeCenterDialog<int>(
       context: context,
       // 屏高八成：记了七八年之后六成要滚很久（标签筛选/操作历史同此尺寸）。
-      builder: (BuildContext context) => _YearSheet(
-        years: years,
-        selected: selected,
-        totals: totals,
-      ),
+      builder: (BuildContext context) =>
+          _YearSheet(years: years, selected: selected, totals: totals),
       maxHeightFactor: 0.8,
     );
     if (picked != null) onSelected(picked);
@@ -485,12 +516,12 @@ class _YearSheet extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: <Widget>[
           Padding(
-            padding: const EdgeInsets.fromLTRB(22, 0, 22, 8),
+            padding: const EdgeInsets.fromLTRB(20, 14, 20, 10),
             child: Row(
               children: <Widget>[
                 Text(
                   '选择年份',
-                  style: theme.textTheme.titleSmall?.copyWith(
+                  style: theme.textTheme.titleMedium?.copyWith(
                     fontWeight: FontWeight.w800,
                   ),
                 ),
@@ -509,7 +540,7 @@ class _YearSheet extends StatelessWidget {
           Flexible(
             child: ListView(
               shrinkWrap: true,
-              padding: const EdgeInsets.fromLTRB(10, 0, 10, 14),
+              padding: const EdgeInsets.fromLTRB(14, 0, 14, 16),
               children: <Widget>[
                 for (final year in years) _tile(context, year),
               ],
@@ -527,15 +558,18 @@ class _YearSheet extends StatelessWidget {
     final count = totals[year] ?? 0;
 
     return ListTile(
-      dense: true,
+      // 不用 dense：与标签筛选弹层同一档 —— 标准 56 高行 + 大一号的年份文字，
+      // 弹层才不显得狭窄（2026-10-22 用户反馈）。
       shape: RoundedRectangleBorder(borderRadius: VestigeRadius.smallAll),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+      visualDensity: const VisualDensity(horizontal: 0, vertical: 2),
       selected: isSelected,
       // 实色高亮：弹层底色是容器白，0.5 半透明的浅蓝叠上去几乎看不出选中。
       selectedTileColor: scheme.primaryContainer,
       title: Text(
         '$year 年',
-        style: theme.textTheme.bodyMedium?.copyWith(
-          fontWeight: isSelected ? FontWeight.w800 : FontWeight.w500,
+        style: theme.textTheme.titleMedium?.copyWith(
+          fontWeight: isSelected ? FontWeight.w800 : FontWeight.w600,
           color: isSelected ? scheme.onPrimaryContainer : scheme.onSurface,
         ),
       ),
@@ -559,7 +593,11 @@ class _YearSheet extends StatelessWidget {
             width: 20,
             height: 20,
             child: isSelected
-                ? Icon(Icons.check_circle, size: 20, color: scheme.primary)
+                ? Icon(
+                    Icons.check_circle_rounded,
+                    size: 20,
+                    color: scheme.primary,
+                  )
                 : null,
           ),
         ],
@@ -676,31 +714,31 @@ class _InsightCard extends StatelessWidget {
             LayoutBuilder(
               builder: (BuildContext context, BoxConstraints constraints) =>
                   _metricGrid(
-                columns: constraints.maxWidth >= _wideBreakpoint ? 4 : 2,
-                tiles: <Widget>[
-                  _Metric(
-                    label: '近 $windowDays 天',
-                    value: '$windowTotal',
-                    unit: '条',
+                    columns: constraints.maxWidth >= _wideBreakpoint ? 4 : 2,
+                    tiles: <Widget>[
+                      _Metric(
+                        label: '近 $windowDays 天',
+                        value: '$windowTotal',
+                        unit: '条',
+                      ),
+                      _Metric(
+                        label: '其中补记',
+                        value: '$windowBackfill',
+                        unit: '条',
+                        highlight: windowBackfill > 0,
+                      ),
+                      _Metric(
+                        label: '有记录天数',
+                        value: '$activeInWindow',
+                        unit: '天',
+                      ),
+                      _Metric(
+                        label: '日均条数',
+                        value: perDay.toStringAsFixed(1),
+                        unit: '条',
+                      ),
+                    ],
                   ),
-                  _Metric(
-                    label: '其中补记',
-                    value: '$windowBackfill',
-                    unit: '条',
-                    highlight: windowBackfill > 0,
-                  ),
-                  _Metric(
-                    label: '有记录天数',
-                    value: '$activeInWindow',
-                    unit: '天',
-                  ),
-                  _Metric(
-                    label: '日均条数',
-                    value: perDay.toStringAsFixed(1),
-                    unit: '条',
-                  ),
-                ],
-              ),
             ),
             const SizedBox(height: 14),
             // 全时段的补记事实 + 口径说明。与「我的」页头卡的「补记 N 条」不同：
@@ -760,7 +798,9 @@ class _InsightCard extends StatelessWidget {
   Widget _metricGrid({required int columns, required List<Widget> tiles}) {
     final rows = <Widget>[];
     for (var start = 0; start < tiles.length; start += columns) {
-      final end = start + columns > tiles.length ? tiles.length : start + columns;
+      final end = start + columns > tiles.length
+          ? tiles.length
+          : start + columns;
       final inRow = tiles.sublist(start, end);
       rows.add(
         Row(
@@ -774,6 +814,139 @@ class _InsightCard extends StatelessWidget {
       );
     }
     return Column(spacing: 10, children: rows);
+  }
+}
+
+/// 「记录时长」卡：窗口口径的时长汇总，挂在「记录习惯」卡下面。
+///
+/// 只回答两个数：**这个窗口里一共花了多久**（主数值）和**最长的一条多久**
+/// （次级）。2026-10-22 按用户要求删掉了「日均时长」—— 只填时长的那部分
+/// 记录除以整个窗口天数，经常小到只剩几秒，看着像数据出错。
+///
+/// 不带自己的窗口选择器 —— 它的口径与「记录习惯」卡右上角那个选择器**同源**
+/// （同一个 [insightWindowProvider]），重复摆一组 chip 只会让人怀疑两处口径
+/// 不一致。窗口内没有任何带时长的记录时整张卡不出现（见
+/// [StatsScreen._windowDurationStats]），从不用时长的用户多不出一张空卡。
+class _DurationCard extends StatelessWidget {
+  const _DurationCard({
+    required this.windowDays,
+    required this.totalSeconds,
+    required this.maxSeconds,
+  });
+
+  final int windowDays;
+  final int totalSeconds;
+  final int maxSeconds;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final surfaces = VestigeSurfaces.of(context);
+
+    return Card(
+      elevation: 0.8,
+      shadowColor: scheme.shadow.withValues(alpha: 0.05),
+      color: surfaces.card,
+      shape: RoundedRectangleBorder(
+        borderRadius: VestigeRadius.mediumAll,
+        side: BorderSide(color: surfaces.border, width: 0.8),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            // 标题行：图标徽标 + 两行文字（与「我的」页设置行同一套 38px 语言）
+            Row(
+              children: <Widget>[
+                Container(
+                  width: 38,
+                  height: 38,
+                  decoration: BoxDecoration(
+                    color: scheme.primaryContainer,
+                    borderRadius: VestigeRadius.insetAll,
+                  ),
+                  child: Icon(
+                    Icons.timelapse_rounded,
+                    size: 20,
+                    color: scheme.onPrimaryContainer,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Text(
+                        '记录时长 · 近 $windowDays 天',
+                        style: theme.textTheme.titleSmall?.copyWith(
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        '只统计填了时长的记录',
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: scheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            // 主数值独占一行（总时长是这张卡的问题「最近花了多少时间」的答案），
+            // 最长一条退到下面一行小字。
+            Text(
+              durationLabel(totalSeconds),
+              style: theme.textTheme.headlineSmall?.copyWith(
+                fontWeight: FontWeight.w800,
+                color: scheme.primary,
+                fontFeatures: const <FontFeature>[FontFeature.tabularFigures()],
+              ),
+            ),
+            const SizedBox(height: 8),
+            _MiniStat(label: '最长一条', value: durationLabelCompact(maxSeconds)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 时长卡下方的次级指标：小标签 + 等宽数值。
+class _MiniStat extends StatelessWidget {
+  const _MiniStat({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: <Widget>[
+        Text(
+          label,
+          style: theme.textTheme.labelSmall?.copyWith(
+            color: scheme.onSurfaceVariant,
+          ),
+        ),
+        const SizedBox(width: 6),
+        Text(
+          value,
+          style: theme.textTheme.bodyMedium?.copyWith(
+            fontWeight: FontWeight.w800,
+            color: scheme.onSurface,
+            fontFeatures: const <FontFeature>[FontFeature.tabularFigures()],
+          ),
+        ),
+      ],
+    );
   }
 }
 
@@ -836,10 +1009,13 @@ class _Metric extends StatelessWidget {
             textBaseline: TextBaseline.alphabetic,
             children: <Widget>[
               Flexible(
-                child: Text(
-                  value,
+                // 数字滚动：首次进入从 0 计数到目标值，窗口切换（7/30/90）时
+                // 从当前值平滑过渡到新值（TweenAnimationBuilder 的 end 变化
+                // 会从当前插值继续）。数字用 tabular figures，滚动中不抖宽。
+                // 解析失败（非数字值）时退回普通 Text，组件不承担格式约定。
+                child: _CountUpText(
+                  value: value,
                   maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
                   style: theme.textTheme.titleLarge?.copyWith(
                     fontWeight: FontWeight.w800,
                     color: highlight ? tokens.backfill : scheme.primary,
@@ -862,6 +1038,43 @@ class _Metric extends StatelessWidget {
             ],
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// 「会数数的文本」：数字值从 0（或上一值）平滑滚到目标值。
+///
+/// 只用于 [ _Metric ] 的数字格。值必须是纯数字（整数或一位小数）；
+/// 解析失败时退回普通 Text。样式、溢出行为与普通 Text 一致。
+class _CountUpText extends StatelessWidget {
+  const _CountUpText({required this.value, required this.style, this.maxLines});
+
+  final String value;
+  final TextStyle? style;
+  final int? maxLines;
+
+  @override
+  Widget build(BuildContext context) {
+    final target = double.tryParse(value);
+    if (target == null) {
+      return Text(
+        value,
+        maxLines: maxLines,
+        overflow: TextOverflow.ellipsis,
+        style: style,
+      );
+    }
+    final isDecimal = value.contains('.');
+    return TweenAnimationBuilder<double>(
+      tween: Tween<double>(begin: 0, end: target),
+      duration: VestigeMotion.slow,
+      curve: VestigeMotion.curve,
+      builder: (context, t, _) => Text(
+        isDecimal ? t.toStringAsFixed(1) : '${t.round()}',
+        maxLines: maxLines,
+        overflow: TextOverflow.ellipsis,
+        style: style,
       ),
     );
   }

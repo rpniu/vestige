@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:vestige/app/router.dart';
@@ -45,10 +46,9 @@ class RecordCalendar extends ConsumerWidget {
           mainAxisAlignment: MainAxisAlignment.center,
           children: <Widget>[
             _NavButton(
-              icon: Icons.chevron_left,
+              icon: Icons.chevron_left_rounded,
               tooltip: '上个月',
-              onTap: () =>
-                  ref.read(calendarMonthProvider.notifier).shift(-1),
+              onTap: () => ref.read(calendarMonthProvider.notifier).shift(-1),
             ),
             SizedBox(
               width: 132,
@@ -61,7 +61,7 @@ class RecordCalendar extends ConsumerWidget {
               ),
             ),
             _NavButton(
-              icon: Icons.chevron_right,
+              icon: Icons.chevron_right_rounded,
               tooltip: '下个月',
               onTap: canGoNext
                   ? () => ref.read(calendarMonthProvider.notifier).shift(1)
@@ -74,7 +74,13 @@ class RecordCalendar extends ConsumerWidget {
         Row(
           children: <Widget>[
             for (final label in const <String>[
-              '一', '二', '三', '四', '五', '六', '日',
+              '一',
+              '二',
+              '三',
+              '四',
+              '五',
+              '六',
+              '日',
             ])
               Expanded(
                 child: Text(
@@ -104,10 +110,14 @@ class RecordCalendar extends ConsumerWidget {
                   switch (cell) {
                     CalendarBlankCell() => const SizedBox.shrink(),
                     CalendarDayCell() => _DayCell(
-                        cell: cell,
-                        maxCount: maxCount,
-                        onTap: () => _showDaySheet(context, ref, shown, cell),
-                      ),
+                      cell: cell,
+                      maxCount: maxCount,
+                      // 选中某天的确认触觉（桌面端自动无效）。
+                      onTap: () {
+                        HapticFeedback.selectionClick();
+                        _showDaySheet(context, ref, shown, cell);
+                      },
+                    ),
                   },
               ],
             ),
@@ -224,8 +234,7 @@ class _DayCell extends StatelessWidget {
               child: Text(
                 '${cell.day}',
                 style: theme.textTheme.labelMedium?.copyWith(
-                  fontWeight:
-                      count > 0 ? FontWeight.w800 : FontWeight.w500,
+                  fontWeight: count > 0 ? FontWeight.w800 : FontWeight.w500,
                   color: fg,
                   fontFeatures: const <FontFeature>[
                     FontFeature.tabularFigures(),
@@ -294,14 +303,14 @@ class _Legend extends StatelessWidget {
   }
 
   Widget _swatch(Color color) => Container(
-        width: 12,
-        height: 12,
-        margin: const EdgeInsets.symmetric(horizontal: 2),
-        decoration: BoxDecoration(
-          color: color,
-          borderRadius: BorderRadius.circular(3),
-        ),
-      );
+    width: 12,
+    height: 12,
+    margin: const EdgeInsets.symmetric(horizontal: 2),
+    decoration: BoxDecoration(
+      color: color,
+      borderRadius: BorderRadius.circular(3),
+    ),
+  );
 }
 
 /// 点某个日格弹出的当天记录列表。

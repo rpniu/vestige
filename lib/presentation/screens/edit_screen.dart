@@ -1,9 +1,13 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:vestige/app/motion.dart';
 import 'package:vestige/app/theme.dart';
 import 'package:vestige/domain/day_util.dart';
+import 'package:vestige/domain/duration_format.dart';
 import 'package:vestige/presentation/providers/edit_record_provider.dart';
 import 'package:vestige/presentation/providers/records_provider.dart';
+import 'package:vestige/presentation/widgets/center_dialog.dart';
 
 /// 编辑 / 新建 / 补记页。
 ///
@@ -13,13 +17,21 @@ import 'package:vestige/presentation/providers/records_provider.dart';
 /// - 标题下方实时提示「这条会被记为 补记 / 今天」，保存前就心里有数；
 /// - 既有记录的**入库时间只读**，避免编辑动作污染审计信息。
 class EditScreen extends ConsumerStatefulWidget {
-  const EditScreen({super.key, this.recordId, this.initialDay});
+  const EditScreen({
+    super.key,
+    this.recordId,
+    this.initialDay,
+    this.initialDurationSec,
+  });
 
   /// 为空表示新建。
   final String? recordId;
 
   /// 新建时预置的业务日期（补记入口传昨天进来）。
   final DateTime? initialDay;
+
+  /// 新建时预置的时长（**秒**）—— 首页计时器「停止并记录」传进来。
+  final int? initialDurationSec;
 
   @override
   ConsumerState<EditScreen> createState() => _EditScreenState();
@@ -29,6 +41,7 @@ class _EditScreenState extends ConsumerState<EditScreen> {
   late final String _key = editRecordKey(
     recordId: widget.recordId,
     initialDay: widget.initialDay,
+    initialDurationSec: widget.initialDurationSec,
   );
 
   @override
@@ -37,9 +50,8 @@ class _EditScreenState extends ConsumerState<EditScreen> {
     final controller = ref.watch(editRecordProvider(_key).notifier);
 
     return async.when(
-      loading: () => const Scaffold(
-        body: Center(child: CircularProgressIndicator()),
-      ),
+      loading: () =>
+          const Scaffold(body: Center(child: CircularProgressIndicator())),
       error: (error, stack) => Scaffold(
         appBar: AppBar(),
         body: Center(child: Text('加载失败：$error')),
@@ -78,7 +90,7 @@ class _EditBody extends StatelessWidget {
           if (!state.isNew)
             IconButton(
               tooltip: '移入回收站',
-              icon: Icon(Icons.delete_outline, color: scheme.error),
+              icon: Icon(Icons.delete_outline_rounded, color: scheme.error),
               onPressed: () => _confirmDelete(context),
             ),
         ],
@@ -90,7 +102,8 @@ class _EditBody extends StatelessWidget {
             _HintCard(
               icon: Icons.history_edu_outlined,
               title: '补记模式',
-              message: '日期已预置为昨天，可改成任意过去的日子；'
+              message:
+                  '日期已预置为昨天，可改成任意过去的日子；'
                   '内容和当天记的一样，保存后会打上「补记」标记。',
             ),
             const SizedBox(height: 16),
@@ -100,6 +113,8 @@ class _EditBody extends StatelessWidget {
           _TitleField(state: state, controller: controller),
           const SizedBox(height: 16),
           _ContentField(state: state, controller: controller),
+          const SizedBox(height: 16),
+          _DurationCard(state: state, controller: controller),
           const SizedBox(height: 16),
           _TagsSection(state: state, controller: controller),
           if (!state.isNew) ...<Widget>[
@@ -118,6 +133,7 @@ class _EditBody extends StatelessWidget {
       // 保存是这一页的主操作，钉在底部常驻（理由见 [_SaveBar]）。
       bottomNavigationBar: _SaveBar(
         isSaving: state.isSaving,
+        canSave: state.canSave,
         onPressed: state.canSave ? () => _save(context) : null,
       ),
     );
@@ -169,9 +185,18 @@ class _EditBody extends StatelessWidget {
 /// 底色用页面底 [VestigeSurfaces.base] 而不是容器白：它是一条「栏」，
 /// 不是一张卡片；靠顶部一条描边和滚动内容分界就够了。
 class _SaveBar extends StatelessWidget {
-  const _SaveBar({required this.isSaving, required this.onPressed});
+  const _SaveBar({
+    required this.isSaving,
+    required this.canSave,
+    required this.onPressed,
+  });
 
   final bool isSaving;
+
+  /// 内容非空才可保存（`canSave = content 非空 && !isSaving`）。
+  /// 单独传进来是为了给禁用态一句「为什么不能点」的文案。
+  final bool canSave;
+
   final VoidCallback? onPressed;
 
   @override
@@ -191,14 +216,37 @@ class _SaveBar extends StatelessWidget {
             height: 52,
             child: FilledButton.icon(
               onPressed: onPressed,
-              icon: isSaving
-                  ? const SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.check_rounded),
-              label: Text(isSaving ? '保存中…' : '保存'),
+              // 图标在「勾 / 转圈」之间用 AnimatedSwitcher 交叉过渡，
+              // 保存动作的发起与完成在视觉上有一个可感知的起止。
+              icon: AnimatedSwitcher(
+                duration: VestigeMotion.fast,
+                switchInCurve: VestigeMotion.curve,
+                switchOutCurve: VestigeMotion.curve.flipped,
+                transitionBuilder: (child, animation) => FadeTransition(
+                  opacity: animation,
+                  child: ScaleTransition(scale: animation, child: child),
+                ),
+                child: isSaving
+                    ? const SizedBox(
+                        key: ValueKey<String>('spinner'),
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(
+                        Icons.check_rounded,
+                        key: ValueKey<String>('check'),
+                      ),
+              ),
+              // 禁用不再只是「灰掉」：给出原因。空内容是唯一的非保存禁用态，
+              // 文案把下一步动作直接说出口。
+              label: Text(
+                isSaving
+                    ? '保存中…'
+                    : canSave
+                    ? '保存'
+                    : '写点内容再保存',
+              ),
             ),
           ),
         ),
@@ -239,10 +287,10 @@ class _RecordTimeCard extends StatelessWidget {
       0 => ('今天记录', scheme.onPrimaryContainer, scheme.primaryContainer),
       1 => ('补记 · 昨天', tokens.onBackfillContainer, tokens.backfillContainer),
       > 1 => (
-          '补记 · $offset 天前',
-          tokens.onBackfillContainer,
-          tokens.backfillContainer,
-        ),
+        '补记 · $offset 天前',
+        tokens.onBackfillContainer,
+        tokens.backfillContainer,
+      ),
       _ => ('未来日期 · 尚未发生', scheme.onErrorContainer, scheme.errorContainer),
     };
 
@@ -279,7 +327,10 @@ class _RecordTimeCard extends StatelessWidget {
                   ),
                 ),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 4,
+                  ),
                   decoration: BoxDecoration(
                     color: chipContainer,
                     borderRadius: VestigeRadius.pillAll,
@@ -359,7 +410,11 @@ class _RecordTimeCard extends StatelessWidget {
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
-                  Icon(Icons.history_toggle_off, size: 15, color: tokens.backfill),
+                  Icon(
+                    Icons.history_toggle_off,
+                    size: 15,
+                    color: tokens.backfill,
+                  ),
                   const SizedBox(width: 6),
                   Expanded(
                     child: Text(
@@ -622,8 +677,9 @@ class _TitleField extends StatefulWidget {
 }
 
 class _TitleFieldState extends State<_TitleField> {
-  late final TextEditingController _text =
-      TextEditingController(text: widget.state.title);
+  late final TextEditingController _text = TextEditingController(
+    text: widget.state.title,
+  );
 
   @override
   void dispose() {
@@ -661,8 +717,9 @@ class _ContentField extends StatefulWidget {
 }
 
 class _ContentFieldState extends State<_ContentField> {
-  late final TextEditingController _text =
-      TextEditingController(text: widget.state.content);
+  late final TextEditingController _text = TextEditingController(
+    text: widget.state.content,
+  );
 
   @override
   void dispose() {
@@ -691,6 +748,384 @@ class _ContentFieldState extends State<_ContentField> {
           builder: (context, value, _) => Text('${value.text.length} 字'),
         ),
       ),
+    );
+  }
+}
+
+/// 时长卡片：「这次花了多久」，可选填。
+///
+/// 两种来路都汇到同一个字段：
+/// - 编辑页手动挑（滚轮 / 快捷 chip）；
+/// - 首页计时器停止后跳转进来时由路由预填（`?dur=`，见 [editRecordKey]）。
+///
+/// 视觉结构抄 [_RecordTimeCard] 的「卡片 + 标题行 + 面板行」，但只有一行，
+/// 不另立标题行 —— 「时长（选填）」本身就是行标签。
+///
+/// 层级（美化，2026-10-22）：图标徽标 → 标题 → 数值/引导两档状态。
+/// 填了时长时数值用主色 + 大一号 + 等宽数字（扫一眼就能读），
+/// 没填时退回弱文字引导 —— 「有没有值」不靠颜色单打独斗。
+class _DurationCard extends StatelessWidget {
+  const _DurationCard({required this.state, required this.controller});
+
+  final EditRecordState state;
+  final EditRecordController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final surfaces = VestigeSurfaces.of(context);
+    final duration = state.durationSec;
+
+    return Card(
+      elevation: 0.8,
+      shadowColor: scheme.shadow.withValues(alpha: 0.05),
+      color: surfaces.card,
+      shape: RoundedRectangleBorder(
+        borderRadius: VestigeRadius.mediumAll,
+        side: BorderSide(color: surfaces.border, width: 0.8),
+      ),
+      child: InkWell(
+        borderRadius: VestigeRadius.mediumAll,
+        onTap: () => _pickDuration(context),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(14, 12, 10, 12),
+          child: Row(
+            children: <Widget>[
+              // 与「我的」页设置行同一套 38px 图标方块语言
+              Container(
+                width: 38,
+                height: 38,
+                decoration: BoxDecoration(
+                  color: duration == null
+                      ? surfaces.inset
+                      : scheme.primaryContainer,
+                  borderRadius: VestigeRadius.insetAll,
+                  border: Border.all(
+                    color: surfaces.border.withValues(alpha: 0.5),
+                    width: 0.6,
+                  ),
+                ),
+                child: Icon(
+                  Icons.timelapse_rounded,
+                  size: 20,
+                  color: duration == null
+                      ? scheme.onSurfaceVariant
+                      : scheme.onPrimaryContainer,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Text(
+                      '时长（选填）',
+                      style: theme.textTheme.labelMedium?.copyWith(
+                        color: scheme.onSurfaceVariant,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    if (duration == null)
+                      Text(
+                        '点击填写 · 这次花了多久',
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          color: scheme.onSurfaceVariant,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      )
+                    else
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.baseline,
+                        textBaseline: TextBaseline.alphabetic,
+                        children: <Widget>[
+                          Text(
+                            durationLabel(duration),
+                            style: theme.textTheme.titleMedium?.copyWith(
+                              color: scheme.primary,
+                              fontWeight: FontWeight.w800,
+                              // 等宽数字：改时长时字宽不跳
+                              fontFeatures: const <FontFeature>[
+                                FontFeature.tabularFigures(),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Flexible(
+                            child: Text(
+                              '点击修改',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: theme.textTheme.labelSmall?.copyWith(
+                                color: scheme.onSurfaceVariant,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                  ],
+                ),
+              ),
+              _PickerButton(
+                icon: Icons.timelapse_outlined,
+                tooltip: '设置时长',
+                onTap: () => _pickDuration(context),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _pickDuration(BuildContext context) async {
+    // 弹层里滚轮按「时 / 分」挑（人对时长的直觉粒度），落库换算成秒。
+    final picked = await showVestigeCenterDialog<int>(
+      context: context,
+      // 滚轮 + chip + 操作行一起比默认 0.6 屏高高：给 0.75，矮屏上也不再溢出
+      // （溢出会把「确定」顶出弹层外，用户根本点不到 —— 真机截图踩过）。
+      maxHeightFactor: 0.75,
+      builder: (context) =>
+          _DurationPickerDialog(initialSeconds: state.durationSec),
+    );
+    if (picked != null) controller.setDurationSec(picked);
+  }
+}
+
+/// 时长选择弹层：时 / 分两个滚轮 + 常用快捷 chip + 清除。
+///
+/// 用滚轮而不是键盘输入：时长没有「敲一个 1 算 1 分还是 10 分」的歧义问题
+/// 那么尖锐，但和编辑页其他入口（日历 / 时钟）保持同一套图形化语言更顺。
+/// 「确定」时 0 时 0 分视同清除（pop 0，[EditRecordController.setDurationSec] 里 0 = 清空）。
+class _DurationPickerDialog extends StatefulWidget {
+  const _DurationPickerDialog({this.initialSeconds});
+
+  final int? initialSeconds;
+
+  @override
+  State<_DurationPickerDialog> createState() => _DurationPickerDialogState();
+}
+
+class _DurationPickerDialogState extends State<_DurationPickerDialog> {
+  late int _hours = (widget.initialSeconds ?? 0) ~/ 3600;
+  late int _minutes = ((widget.initialSeconds ?? 0) % 3600) ~/ 60;
+  late int _seconds = (widget.initialSeconds ?? 0) % 60;
+
+  late final FixedExtentScrollController _hourController =
+      FixedExtentScrollController(initialItem: _hours);
+  late final FixedExtentScrollController _minuteController =
+      FixedExtentScrollController(initialItem: _minutes);
+  late final FixedExtentScrollController _secondController =
+      FixedExtentScrollController(initialItem: _seconds);
+
+  @override
+  void dispose() {
+    _hourController.dispose();
+    _minuteController.dispose();
+    _secondController.dispose();
+    super.dispose();
+  }
+
+  /// 快捷档传的是**秒**（与存储单位一致）。早先这里按分钟拆，1800 秒被算成
+  /// 30 小时、再被时分轮夹到 23 小时 —— 用户报的「修改时长有 bug」就是它。
+  void _applyQuick(int seconds) {
+    final h = seconds ~/ 3600;
+    final m = (seconds % 3600) ~/ 60;
+    final s = seconds % 60;
+    setState(() {
+      _hours = h;
+      _minutes = m;
+      _seconds = s;
+    });
+    // 滚轮跳转放到 setState 之外：jumpToItem 会回调 onSelectedItemChanged，
+    // 在 setState 回调里再触发一次 setState 属于嵌套调用。
+    _hourController.jumpToItem(h);
+    _minuteController.jumpToItem(m);
+    _secondController.jumpToItem(s);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final hadDuration = widget.initialSeconds != null;
+    final surfaces = VestigeSurfaces.of(context);
+    final totalSeconds = _hours * 3600 + _minutes * 60 + _seconds;
+
+    // 整体包在 SingleChildScrollView 里：大字号/矮屏下内容宁可滚，
+    // 也不能把「确定」顶出弹层（溢出 = 操作不可达，见 _pickDuration 的说明）。
+    return SingleChildScrollView(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 18, 20, 14),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            // 标题行右侧常驻**实时结果**：滚轮一动这里就变，用户不用在
+            // 「0 时 45 分」两个数字之间自己口算。
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.baseline,
+              textBaseline: TextBaseline.alphabetic,
+              children: <Widget>[
+                Text(
+                  '设置时长',
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                const Spacer(),
+                Text(
+                  totalSeconds == 0 ? '未设置' : durationLabel(totalSeconds),
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    color: totalSeconds == 0
+                        ? scheme.onSurfaceVariant
+                        : scheme.primary,
+                    fontWeight: FontWeight.w800,
+                    fontFeatures: const <FontFeature>[
+                      FontFeature.tabularFigures(),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            // 快捷 chip：最常见的几档，点一下双轮就位，不用滚。
+            // 用 ChoiceChip 而不是 ActionChip：当前值正好等于某一档时，
+            // 「已经选中」这件事应该看得出来（ActionChip 永远长得一样）。
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: <Widget>[
+                for (final sec in const <int>[
+                  900,
+                  1800,
+                  2700,
+                  3600,
+                  5400,
+                  7200,
+                ])
+                  ChoiceChip(
+                    label: Text(durationLabel(sec)),
+                    selected: totalSeconds == sec,
+                    onSelected: (_) => _applyQuick(sec),
+                    visualDensity: VisualDensity.compact,
+                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    labelStyle: theme.textTheme.labelSmall?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            // 滚轮 + 中间选中带：CupertinoPicker 在浅色卡面上没有底衬时，
+            // 「选中的是哪一行」全靠字号变化读，弱得几乎看不出来。
+            Stack(
+              alignment: Alignment.center,
+              children: <Widget>[
+                // 选中带在滚轮**下面**（先画），这样它不挡 item 的可读性
+                Container(
+                  height: 40,
+                  margin: const EdgeInsets.symmetric(horizontal: 8),
+                  decoration: BoxDecoration(
+                    color: surfaces.inset,
+                    borderRadius: VestigeRadius.smallAll,
+                    border: Border.all(color: surfaces.border),
+                  ),
+                ),
+                SizedBox(
+                  height: 132,
+                  child: Row(
+                    children: <Widget>[
+                      Expanded(
+                        child: _wheel(
+                          controller: _hourController,
+                          count: 24,
+                          unit: '时',
+                          onChanged: (v) => setState(() => _hours = v),
+                        ),
+                      ),
+                      Expanded(
+                        child: _wheel(
+                          controller: _minuteController,
+                          count: 60,
+                          unit: '分',
+                          onChanged: (v) => setState(() => _minutes = v),
+                        ),
+                      ),
+                      // 秒轮：计时器结算是秒级精度，编辑时若只到分钟，
+                      // 一进一出就把零头截掉了（90 秒 → 60 秒）。
+                      Expanded(
+                        child: _wheel(
+                          controller: _secondController,
+                          count: 60,
+                          unit: '秒',
+                          onChanged: (v) => setState(() => _seconds = v),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: <Widget>[
+                if (hadDuration)
+                  TextButton(
+                    onPressed: () => Navigator.of(context).pop(0),
+                    child: Text('清除', style: TextStyle(color: scheme.error)),
+                  ),
+                const Spacer(),
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text('取消'),
+                ),
+                const SizedBox(width: 8),
+                FilledButton(
+                  // pop 出来的是**秒**：0 = 清空，其余 = 时×3600 + 分×60
+                  onPressed: () => Navigator.of(context).pop(totalSeconds),
+                  child: const Text('确定'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _wheel({
+    required FixedExtentScrollController controller,
+    required int count,
+    required String unit,
+    required ValueChanged<int> onChanged,
+  }) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    return CupertinoPicker(
+      scrollController: controller,
+      itemExtent: 38,
+      magnification: 1.1,
+      squeeze: 1.1,
+      looping: false,
+      backgroundColor: Colors.transparent,
+      // 默认的选中框是两条横线，和下面自绘的选中带叠在一起会很乱
+      selectionOverlay: const SizedBox.shrink(),
+      onSelectedItemChanged: onChanged,
+      children: <Widget>[
+        for (var i = 0; i < count; i++)
+          Center(
+            child: Text(
+              '$i $unit',
+              style: theme.textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.w700,
+                fontFeatures: const <FontFeature>[FontFeature.tabularFigures()],
+                color: scheme.onSurface,
+              ),
+            ),
+          ),
+      ],
     );
   }
 }
@@ -742,13 +1177,13 @@ class _TagsSection extends StatelessWidget {
                   (tag) => Chip(
                     label: Text('#$tag'),
                     onDeleted: () => controller.removeTag(tag),
-                    deleteIcon: const Icon(Icons.close, size: 16),
+                    deleteIcon: const Icon(Icons.close_rounded, size: 16),
                     backgroundColor: scheme.secondaryContainer,
                     side: BorderSide.none,
                   ),
                 ),
                 ActionChip(
-                  avatar: const Icon(Icons.add, size: 16),
+                  avatar: const Icon(Icons.add_rounded, size: 16),
                   label: const Text('添加标签'),
                   onPressed: () => _promptNewTag(context),
                 ),
@@ -822,7 +1257,7 @@ class _HistoryTagSuggestions extends ConsumerWidget {
               for (final t in suggestions)
                 ActionChip(
                   avatar: Icon(
-                    Icons.add,
+                    Icons.add_rounded,
                     size: 15,
                     color: scheme.onSurfaceVariant,
                   ),
@@ -976,6 +1411,13 @@ class _MetaCard extends StatelessWidget {
             editable: true,
           ),
           _MetaRow(
+            label: '时长',
+            value: state.durationSec == null
+                ? '未记录'
+                : durationLabel(state.durationSec!),
+            note: '可在上方「时长（选填）」卡修改',
+          ),
+          _MetaRow(
             label: '入库时间',
             value: state.createdAt == null
                 ? '—'
@@ -1024,10 +1466,7 @@ class _MetaRow extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
-          SizedBox(
-            width: 72,
-            child: Text(label, style: style),
-          ),
+          SizedBox(width: 72, child: Text(label, style: style)),
           Expanded(
             child: selectable
                 ? SelectableText(value, style: style)

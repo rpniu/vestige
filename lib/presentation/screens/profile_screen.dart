@@ -4,9 +4,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:vestige/app/motion.dart';
 import 'package:vestige/app/router.dart';
 import 'package:vestige/app/theme.dart';
+import 'package:vestige/data/config/home_layout_config.dart';
 import 'package:vestige/domain/csv_util.dart';
+import 'package:vestige/presentation/providers/home_layout_provider.dart';
 import 'package:vestige/presentation/providers/records_provider.dart';
 import 'package:vestige/presentation/providers/theme_provider.dart';
 import 'package:vestige/presentation/services/csv_file.dart';
@@ -51,6 +54,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
   Widget build(BuildContext context) {
     final settings = ref.watch(themeProvider);
     final stats = ref.watch(recordStatsProvider);
+    final layout = ref.watch(homeButtonLayoutProvider);
 
     return Scaffold(
       appBar: AppBar(title: const Text('我的')),
@@ -64,7 +68,8 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
           Card(
             child: Column(
               children: <Widget>[
-                for (final (i, variant) in AppThemeVariant.values.indexed) ...<Widget>[
+                for (final (i, variant)
+                    in AppThemeVariant.values.indexed) ...<Widget>[
                   if (i > 0) const Divider(height: 0),
                   _OptionTile(
                     leading: _PalettePreview(variant: variant),
@@ -98,6 +103,31 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
           ),
           const SizedBox(height: 24),
 
+          _SectionTitle('首页按钮位置'),
+          Card(
+            child: Column(
+              children: <Widget>[
+                for (final (i, side) in ButtonSide.values.indexed) ...<Widget>[
+                  if (i > 0) const Divider(height: 0),
+                  _OptionTile(
+                    leading: const _SideIcon(
+                      icon: Icons.switch_access_shortcut_rounded,
+                    ),
+                    title: side == ButtonSide.left ? '靠左' : '靠右',
+                    subtitle: i == 0
+                        ? '「记一笔」与速记 / 计时胶囊停靠的屏幕侧'
+                        : null,
+                    selected: layout == side,
+                    onTap: () => ref
+                        .read(homeButtonLayoutProvider.notifier)
+                        .setSide(side),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(height: 24),
+
           _SectionTitle('数据管理'),
           Card(
             child: Column(
@@ -119,7 +149,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                 ),
                 const Divider(height: 0),
                 _ActionTile(
-                  icon: Icons.delete_outline,
+                  icon: Icons.delete_outline_rounded,
                   title: '回收站',
                   subtitle: '管理已删除的记录',
                   enabled: !_busy,
@@ -127,7 +157,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                 ),
                 const Divider(height: 0),
                 _ActionTile(
-                  icon: Icons.history,
+                  icon: Icons.history_rounded,
                   title: '操作历史',
                   subtitle: '回退批量改标签、平移日期、删除等操作',
                   enabled: !_busy,
@@ -141,7 +171,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
           _SectionTitle('关于'),
           Card(
             child: _ActionTile(
-              icon: Icons.info_outline,
+              icon: Icons.info_outline_rounded,
               title: 'Vestige 1.0.0',
               subtitle: '记录日期与入库时间分离，支持随时随地补记',
               onTap: _showAbout,
@@ -190,9 +220,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
       // 2) 移动端 / Web：临时文件 + 系统分享（Web 分享文本，浏览器负责下载）
       final tempPath = await writeTempCsv(csv, fileName);
       final shared = tempPath == null
-          ? await _tryShare(
-              ShareParams(text: csv, subject: 'Vestige 数据导出'),
-            )
+          ? await _tryShare(ShareParams(text: csv, subject: 'Vestige 数据导出'))
           : await _tryShare(
               ShareParams(
                 files: <XFile>[XFile(tempPath, mimeType: 'text/csv')],
@@ -274,8 +302,9 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
       );
       if (confirmed != true || !mounted) return;
 
-      final count =
-          await ref.read(recordActionsProvider).importRecords(preview.records);
+      final count = await ref
+          .read(recordActionsProvider)
+          .importRecords(preview.records);
       if (!mounted) return;
       _toast(
         '已从「${file.name}」导入 $count 条'
@@ -292,11 +321,20 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     showDialog<void>(
       context: context,
       builder: (context) => AlertDialog(
-        // 爪印图标与首页空态、页头卡是同一个「足迹」意象
-        icon: Icon(
-          Icons.pets,
-          size: 28,
-          color: Theme.of(context).colorScheme.primary,
+        // 爪印坐进主色圆角方块（与页头卡头像同款造型）——
+        // 裸图标太单薄，App 的「脸面」值得一个正经的品牌位。
+        icon: Container(
+          width: 48,
+          height: 48,
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.primary,
+            borderRadius: VestigeRadius.insetAll,
+          ),
+          child: Icon(
+            Icons.pets_rounded,
+            size: 26,
+            color: Theme.of(context).colorScheme.onPrimary,
+          ),
         ),
         title: const Text('关于 Vestige'),
         content: const Text(
@@ -361,12 +399,7 @@ class _ImportPreviewDialog extends StatelessWidget {
                 color: tokens.backfill,
               ),
             if (preview.skipped > 0)
-              _row(
-                context,
-                '跳过',
-                '${preview.skipped} 行',
-                color: scheme.error,
-              ),
+              _row(context, '跳过', '${preview.skipped} 行', color: scheme.error),
             if (preview.errors.isNotEmpty) ...<Widget>[
               const SizedBox(height: 6),
               Text(
@@ -480,49 +513,78 @@ class _HeaderCard extends StatelessWidget {
       ),
       child: Padding(
         padding: const EdgeInsets.fromLTRB(18, 18, 18, 18),
-        child: Row(
+        child: Stack(
+          clipBehavior: Clip.none,
           children: <Widget>[
-            // 圆角方形头像（不是圆形）：本 App 的形状语言是圆角矩形 ——
-            // 卡片 24、徽标 12、FAB 18，圆形只留给状态点。
-            Container(
-              width: 54,
-              height: 54,
-              decoration: BoxDecoration(
-                color: scheme.primary,
-                borderRadius: VestigeRadius.insetAll,
-                boxShadow: <BoxShadow>[
-                  BoxShadow(
-                    color: scheme.primary.withValues(alpha: 0.22),
-                    blurRadius: 10,
-                    offset: const Offset(0, 3),
-                  ),
-                ],
+            // 右上角大号半透明爪印 —— 让头卡有「签名感」，而不只是一块
+            // 主色色块。透明度压到 0.08，不与文字抢注意力；卡片主题是
+            // antiAlias 裁切，出血部分被 24 圆角裁掉，不会溢出。
+            Positioned(
+              right: -14,
+              top: -14,
+              child: Icon(
+                Icons.pets_rounded,
+                size: 92,
+                color: scheme.primary.withValues(alpha: 0.08),
               ),
-              child: Icon(Icons.pets_rounded, color: scheme.onPrimary, size: 28),
             ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  Text(
-                    '共 ${stats.totalCount} 条记录',
-                    style: theme.textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.w800,
-                      color: scheme.primary,
-                    ),
+            // 原来的整行内容（头像 + 文案）作为 Stack 的第二个孩子，
+            // 保持在 Row 里 —— Expanded 只能活在 Row/Column 里。
+            Row(
+              children: <Widget>[
+                // 圆角方形头像（不是圆形）：本 App 的形状语言是圆角矩形 ——
+                // 卡片 24、徽标 12、FAB 18，圆形只留给状态点。
+                Container(
+                  width: 54,
+                  height: 54,
+                  decoration: BoxDecoration(
+                    color: scheme.primary,
+                    borderRadius: VestigeRadius.insetAll,
+                    boxShadow: <BoxShadow>[
+                      BoxShadow(
+                        color: scheme.primary.withValues(alpha: 0.22),
+                        blurRadius: 10,
+                        offset: const Offset(0, 3),
+                      ),
+                    ],
                   ),
-                  const SizedBox(height: 4),
-                  Text(
-                    '活跃 ${stats.activeDays} 天 · 连续 ${stats.streak} 天'
-                    '${stats.backfilledCount > 0 ? ' · 补记 ${stats.backfilledCount} 条' : ''}',
-                    style: theme.textTheme.labelSmall?.copyWith(
-                      color: scheme.onPrimaryContainer.withValues(alpha: 0.85),
-                      fontWeight: FontWeight.w600,
-                    ),
+                  child: Icon(
+                    Icons.pets_rounded,
+                    color: scheme.onPrimary,
+                    size: 28,
                   ),
-                ],
-              ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Text(
+                        '共 ${stats.totalCount} 条记录',
+                        style: theme.textTheme.titleMedium
+                            ?.copyWith(
+                              fontWeight: FontWeight.w800,
+                              color: scheme.primary,
+                            )
+                            .tabular,
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        '活跃 ${stats.activeDays} 天 · 连续 ${stats.streak} 天'
+                        '${stats.backfilledCount > 0 ? ' · 补记 ${stats.backfilledCount} 条' : ''}',
+                        style: theme.textTheme.labelSmall
+                            ?.copyWith(
+                              color: scheme.onPrimaryContainer.withValues(
+                                alpha: 0.85,
+                              ),
+                              fontWeight: FontWeight.w600,
+                            )
+                            .tabular,
+                      ),
+                    ],
+                  ),
+                ),
+              ],
             ),
           ],
         ),
@@ -576,8 +638,9 @@ class _OptionTile extends StatelessWidget {
                     Text(
                       title,
                       style: theme.textTheme.bodyMedium?.copyWith(
-                        fontWeight:
-                            selected ? FontWeight.w800 : FontWeight.w600,
+                        fontWeight: selected
+                            ? FontWeight.w800
+                            : FontWeight.w600,
                         // 选中行标题上主色：三张卡扫过去，「现在生效的是哪行」
                         // 不用挨个找勾。
                         color: selected ? scheme.primary : scheme.onSurface,
@@ -596,9 +659,21 @@ class _OptionTile extends StatelessWidget {
               SizedBox(
                 width: 24,
                 height: 24,
-                child: selected
-                    ? Icon(Icons.check_circle, size: 20, color: scheme.primary)
-                    : null,
+                // 勾位固定占位（与统计页年份弹层同一写法），勾的出现用
+                // AnimatedScale（fast 档）：从小到大弹出，比硬出现柔和，
+                // 占位不变所以行高稳定。
+                child: AnimatedScale(
+                  duration: VestigeMotion.fast,
+                  curve: VestigeMotion.curve,
+                  scale: selected ? 1 : 0,
+                  child: selected
+                      ? Icon(
+                          Icons.check_circle_rounded,
+                          size: 20,
+                          color: scheme.primary,
+                        )
+                      : null,
+                ),
               ),
             ],
           ),
@@ -622,6 +697,32 @@ class _ModeIcon extends StatelessWidget {
       ThemeMode.light => Icons.light_mode_outlined,
       ThemeMode.dark => Icons.dark_mode_outlined,
     };
+    final surfaces = VestigeSurfaces.of(context);
+    return Container(
+      width: 38,
+      height: 38,
+      decoration: BoxDecoration(
+        color: scheme.primaryContainer,
+        borderRadius: VestigeRadius.insetAll,
+        border: Border.all(
+          color: surfaces.border.withValues(alpha: 0.5),
+          width: 0.6,
+        ),
+      ),
+      child: Icon(icon, size: 20, color: scheme.onPrimaryContainer),
+    );
+  }
+}
+
+/// 首页按钮位置行的 leading：38px 图标方块，与 [_ModeIcon] 同一尺寸语言。
+class _SideIcon extends StatelessWidget {
+  const _SideIcon({required this.icon});
+
+  final IconData icon;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
     final surfaces = VestigeSurfaces.of(context);
     return Container(
       width: 38,
@@ -684,10 +785,10 @@ class _PalettePreview extends StatelessWidget {
   }
 
   Widget _dot(Color color) => Container(
-        width: 12,
-        height: 12,
-        decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-      );
+    width: 12,
+    height: 12,
+    decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+  );
 }
 
 class _SectionTitle extends StatelessWidget {

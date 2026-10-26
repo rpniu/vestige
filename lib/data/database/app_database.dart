@@ -22,6 +22,11 @@ part 'app_database.g.dart';
 ///   不自动删，估偏了最多是多提示一次，不会替用户删掉东西。
 /// - v4：加 undo_entries 表（可撤销操作的历史 + 操作前快照）。
 ///   纯新增表，不动 records，升级无数据风险。
+/// - v5：records 加 duration_min（本次记录的时长，分钟，可空）。
+///   可空列裸 SQL 加即可，不需要默认值；旧行自然是 null = 没记时长。
+/// - v6：时长单位从分钟改成秒 —— 加 duration_s，把 duration_min ×60 搬进去。
+///   duration_min 列**留在表里不再使用**（SQLite DROP COLUMN 在老引擎上
+///   不可靠，不值得为删一列冒迁移风险）；新读写只认 duration_s。
 @DriftDatabase(
   tables: [Records, UndoEntries],
   daos: [RecordDao],
@@ -32,7 +37,7 @@ class VestigeDatabase extends _$VestigeDatabase {
   VestigeDatabase([QueryExecutor? executor]) : super(executor ?? connect());
 
   @override
-  int get schemaVersion => 4;
+  int get schemaVersion => 6;
 
   /// 表里是否已有某一列。
   ///
@@ -111,6 +116,23 @@ class VestigeDatabase extends _$VestigeDatabase {
           if (from < 4 && !await _tableExists('undo_entries')) {
             // 纯新增一张表，不碰 records —— 这一步没有数据风险。
             await m.createTable(undoEntries);
+          }
+          if (from < 5 && !await _columnExists('records', 'duration_min')) {
+            // 可空列，裸 SQL 加即可（同 v3 的 deleted_at，不需要默认值）。
+            await customStatement(
+              'ALTER TABLE records ADD COLUMN duration_min INTEGER',
+            );
+          }
+          if (from < 6 && !await _columnExists('records', 'duration_s')) {
+            // 时长单位分钟 → 秒：新列加上后，把旧分钟列的值 ×60 搬过来。
+            // duration_min 列保留不删（见版本历史 v6 的说明）。
+            await customStatement(
+              'ALTER TABLE records ADD COLUMN duration_s INTEGER',
+            );
+            await customStatement(
+              'UPDATE records SET duration_s = duration_min * 60 '
+              'WHERE duration_s IS NULL AND duration_min IS NOT NULL',
+            );
           }
         },
         beforeOpen: (details) async {

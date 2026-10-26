@@ -74,6 +74,13 @@ class Records extends Table {
   /// 恢复时清回 null，于是「恢复 → 再删」会重新开始计时。
   DateTimeColumn get deletedAt => dateTime().nullable()();
 
+  /// 本次记录的时长（**秒**），可空 —— 没记时长就是 null。
+  ///
+  /// 为什么用秒而不是分钟：计时器天然是秒级精度，存分钟等于每次结算都要
+  /// 丢一次精度；展示层的「45 秒 / 1 时 20 分」由 [durationLabel] 按跨度
+  /// 自动选单位，存储只留一个诚实的基本单位。
+  IntColumn get durationS => integer().nullable()();
+
   @override
   Set<Column<Object>> get primaryKey => {id};
 }

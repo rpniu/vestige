@@ -8,6 +8,7 @@ import 'package:vestige/app/theme.dart';
 import 'package:vestige/data/database/app_database.dart';
 import 'package:vestige/presentation/providers/core_providers.dart';
 import 'package:vestige/presentation/providers/search_history_provider.dart';
+import 'package:vestige/presentation/widgets/empty_state.dart';
 import 'package:vestige/presentation/widgets/record_card.dart';
 
 /// 全文搜索页：标题 / 正文 / 标签的包含匹配。
@@ -43,7 +44,8 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   static const Duration _debounceDelay = Duration(milliseconds: 280);
 
   /// 有没有搜索条件（关键词或日期范围）。都没有 = 显示引导页。
-  bool get _hasCondition => _controller.text.trim().isNotEmpty || _range != null;
+  bool get _hasCondition =>
+      _controller.text.trim().isNotEmpty || _range != null;
 
   @override
   void dispose() {
@@ -70,7 +72,9 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
 
   Future<void> _run(String q) async {
     final range = _range;
-    final results = await ref.read(recordRepositoryProvider).searchRecords(
+    final results = await ref
+        .read(recordRepositoryProvider)
+        .searchRecords(
           q,
           from: range?.start,
           // 选择器给的是闭区间（含 end 那天），仓储要的是左闭右开 ——
@@ -168,12 +172,14 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
             hintText: '搜索标题、正文或标签',
             // 收窄上下留白：主题默认 14 是照着页面里的输入框配的，
             // 顶栏 56 高里会显得过满。
-            contentPadding:
-                const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 14,
+              vertical: 10,
+            ),
             suffixIcon: _controller.text.isEmpty
                 ? null
                 : IconButton(
-                    icon: const Icon(Icons.close, size: 18),
+                    icon: const Icon(Icons.close_rounded, size: 18),
                     tooltip: '清空',
                     onPressed: () {
                       _controller.clear();
@@ -189,11 +195,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
         children: <Widget>[
           // 范围条常驻（引导页也显示）：用户可能先框定时间段、再输入关键词，
           // 也可能反过来；而且「现在有没有被范围限制住」得一眼看得出来。
-          _RangeBar(
-            range: _range,
-            onPick: _pickRange,
-            onClear: _clearRange,
-          ),
+          _RangeBar(range: _range, onPick: _pickRange, onClear: _clearRange),
           Expanded(child: _buildBody(theme, scheme, surfaces)),
         ],
       ),
@@ -292,7 +294,7 @@ class _SearchHint extends ConsumerWidget {
                 shape: BoxShape.circle,
               ),
               child: Icon(
-                Icons.search,
+                Icons.search_rounded,
                 size: 36,
                 color: scheme.onPrimaryContainer,
               ),
@@ -331,7 +333,7 @@ class _SearchHint extends ConsumerWidget {
                     onPressed: () => onPick(q),
                     onDeleted: () =>
                         ref.read(searchHistoryProvider.notifier).remove(q),
-                    deleteIcon: const Icon(Icons.close, size: 14),
+                    deleteIcon: const Icon(Icons.close_rounded, size: 14),
                     visualDensity: VisualDensity.compact,
                   ),
               ],
@@ -384,17 +386,17 @@ class _RangeBar extends StatelessWidget {
         alignment: Alignment.centerLeft,
         child: r == null
             ? ActionChip(
-                avatar: const Icon(Icons.date_range, size: 16),
+                avatar: const Icon(Icons.date_range_rounded, size: 16),
                 label: const Text('全部时间'),
                 onPressed: onPick,
                 visualDensity: VisualDensity.compact,
               )
             : InputChip(
-                avatar: const Icon(Icons.date_range, size: 16),
+                avatar: const Icon(Icons.date_range_rounded, size: 16),
                 label: Text(searchRangeLabel(r)),
                 onPressed: onPick,
                 onDeleted: onClear,
-                deleteIcon: const Icon(Icons.close, size: 14),
+                deleteIcon: const Icon(Icons.close_rounded, size: 14),
                 visualDensity: VisualDensity.compact,
                 selected: true,
                 // 选中态加主色描边：这是「当前被范围限制着」的唯一视觉信号
@@ -445,44 +447,14 @@ class _NoResult extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final scheme = theme.colorScheme;
-    final surfaces = VestigeSurfaces.of(context);
-
+    // 空态收敛到共用组件（文案保持原样）；末尾留一截屏高，
+    // 让空态在视觉上不顶着底部。
     return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: <Widget>[
-          Container(
-            width: 84,
-            height: 84,
-            decoration: BoxDecoration(
-              color: surfaces.inset,
-              shape: BoxShape.circle,
-              border: Border.all(color: surfaces.border),
-            ),
-            child: Icon(
-              Icons.search_off_outlined,
-              size: 34,
-              color: scheme.outline,
-            ),
-          ),
-          const SizedBox(height: 16),
-          Text(
-            '没有找到「$query」',
-            style: theme.textTheme.titleMedium?.copyWith(
-              fontWeight: FontWeight.w800,
-            ),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            '换个关键词试试，或检查是不是记在了别的标签里',
-            style: theme.textTheme.labelSmall?.copyWith(
-              color: scheme.onSurfaceVariant,
-            ),
-          ),
-          SizedBox(height: MediaQuery.sizeOf(context).height * 0.12),
-        ],
+      child: VestigeEmptyState(
+        icon: Icons.search_off_outlined,
+        title: '没有找到「$query」',
+        subtitle: '换个关键词试试，或检查是不是记在了别的标签里',
+        trailing: SizedBox(height: MediaQuery.sizeOf(context).height * 0.12),
       ),
     );
   }

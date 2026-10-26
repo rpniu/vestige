@@ -11,12 +11,14 @@ import 'package:vestige/domain/day_util.dart';
 /// `ID,Title,Content,Tags,CreatedAt,UpdatedAt`（毫秒时间戳）。
 /// v2 导出 7 列，插入了 `RecordedAt`：
 /// `ID,Title,Content,Tags,RecordedAt,CreatedAt,UpdatedAt`
+/// v5 再加第 8 列（时长；没记时长是空串）。列名用 `DurationSec`（**秒**），
+/// 导入时兼容更早开发版用过的 `DurationMin`（分钟，自动 ×60）。
 ///
 /// 导入按**表头名字**匹配列，因此：
 /// - 新格式：`recordedAt` 取 RecordedAt 列；
 /// - 旧格式（无 RecordedAt）：把 CreatedAt 当作业务日期（旧版语义就是如此），
 ///   `createdAt` 同时沿用旧值，于是旧数据不会被误标成「补记」；
-/// - 没有表头的裸数据：7 列按新顺序、6 列按旧顺序解析；
+/// - 没有表头的裸数据：8 列按新顺序、7 列按 v2 顺序、6 列按旧顺序解析；
 /// - 时间值兼容「秒级时间戳」（自动 ×1000）与 ISO-8601 字符串。
 ///
 /// 手写解析器（而非依赖 csv 包）：字段少但要求严——必须容忍 BOM、CRLF、
@@ -36,6 +38,7 @@ class CsvUtil {
     'RecordedAt',
     'CreatedAt',
     'UpdatedAt',
+    'DurationSec',
   ];
 
   /// 标签在 CSV 内用 `;` 分隔（与原 Kotlin 导出一致，避免与字段逗号冲突）。
@@ -88,6 +91,7 @@ class CsvUtil {
           r.recordedAt.millisecondsSinceEpoch.toString(),
           r.createdAt.millisecondsSinceEpoch.toString(),
           r.updatedAt.millisecondsSinceEpoch.toString(),
+          r.durationS?.toString() ?? '',
         ].join(','),
       );
     }
@@ -150,6 +154,17 @@ class CsvUtil {
         'UPDATEDAT',
         fallback: headIndex == null ? (row.length >= 7 ? 6 : 5) : null,
       );
+      // 时长（秒）：只有第 8 列按表头匹配，裸数据顺序不给 fallback ——
+      // 旧 6/7 列的裸数据本来就没有时长。表头是 DurationMin（分钟）时 ×60。
+      final durationRaw = cell('DURATIONSEC');
+      final durationMinRaw = cell('DURATIONMIN');
+      final int? durationS;
+      if (durationRaw.isNotEmpty) {
+        durationS = int.tryParse(durationRaw);
+      } else {
+        final asMinutes = int.tryParse(durationMinRaw);
+        durationS = asMinutes == null ? null : asMinutes * 60;
+      }
 
       final now = DateTime.now();
       final created = _parseTime(createdRaw) ?? _parseTime(recordedRaw) ?? now;
@@ -179,6 +194,7 @@ class CsvUtil {
           createdAt: created,
           updatedAt: updated,
           deleted: false,
+          durationS: durationS,
         ),
       );
     }

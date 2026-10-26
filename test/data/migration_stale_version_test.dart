@@ -80,7 +80,7 @@ void main() {
 
     final version = await db.customSelect('PRAGMA user_version').getSingle();
     // 每次加迁移都要跟着改这个数字（与 v2→v3 测试同款断言）
-    expect(version.data.values.first, 4);
+    expect(version.data.values.first, 6);
     expect(
       (await db.customSelect('SELECT COUNT(*) AS n FROM records').get())
           .single

@@ -62,12 +62,12 @@ void main() {
     expect(find.text(thisLabel), findsOneWidget);
 
     // 当月时「下个月」不可点
-    await tester.tap(find.byIcon(Icons.chevron_right));
+    await tester.tap(find.byIcon(Icons.chevron_right_rounded));
     await tester.pumpAndSettle();
     expect(find.text(thisLabel), findsOneWidget, reason: '当月不能再往后翻');
 
     // 翻回上月
-    await tester.tap(find.byIcon(Icons.chevron_left));
+    await tester.tap(find.byIcon(Icons.chevron_left_rounded));
     await tester.pumpAndSettle();
     final prev = DateTime(now.year, now.month - 1);
     expect(find.text('${prev.year}年${prev.month}月'), findsOneWidget);

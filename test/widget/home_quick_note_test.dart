@@ -21,11 +21,11 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:vestige/app/theme.dart';
 import 'package:vestige/data/database/app_database.dart';
+import 'package:vestige/domain/day_util.dart';
 import 'package:vestige/data/repositories/record_repository.dart';
 import 'package:vestige/presentation/providers/core_providers.dart';
 import 'package:vestige/presentation/providers/theme_provider.dart';
 import 'package:vestige/presentation/screens/home_screen.dart';
-import 'package:vestige/presentation/widgets/scroll_jump_button.dart';
 
 void main() {
   late VestigeDatabase db;
@@ -58,8 +58,10 @@ void main() {
           sharedPreferencesProvider.overrideWithValue(prefs),
         ],
         child: MaterialApp(
-          theme:
-              buildVestigeTheme(AppThemeVariant.defaultBlue, Brightness.light),
+          theme: buildVestigeTheme(
+            AppThemeVariant.defaultBlue,
+            Brightness.light,
+          ),
           home: const HomeScreen(),
         ),
       ),
@@ -77,6 +79,9 @@ void main() {
     await tester.pump(Duration.zero);
   }
 
+  /// dock 段/FAB 的标称边长（56），用于等尺寸断言。
+  const double _buttonSideForTest = 56;
+
   /// 速记按钮：白底 Material 包着的闪电图标。
   Finder quickNoteButton() => find.byIcon(Icons.bolt_rounded);
 
@@ -88,7 +93,8 @@ void main() {
     expect(find.byIcon(Icons.add_rounded), findsOneWidget);
 
     final quickNote = tester.getRect(quickNoteButton());
-    final fab = tester.getRect(find.byType(FloatingActionButton));
+    // 量 FAB 的外框 SizedBox（FAB 自身 render box 受主题 tapTargetSize 影响）
+    final fab = tester.getRect(find.byKey(const ValueKey('fab_button')));
     expect(
       quickNote.bottom,
       lessThan(fab.top),
@@ -98,25 +104,26 @@ void main() {
     await drainStreamTeardown(tester);
   });
 
-  testWidgets('按钮列顺序：自下而上是「记一笔 → 速记 → 到顶/到底」', (tester) async {
+  testWidgets('dock 段顺序：自下而上是「记一笔 → 速记 → 计时」', (tester) async {
     await pumpHome(tester);
 
-    // ScrollJumpButton 初始不可见（opacity 0 / IgnorePointer），但仍在树里，
-    // getRect 能拿到它的布局位置 —— 所以可以直接用它量顺序。
-    final fab = tester.getRect(find.byType(FloatingActionButton));
-    final quickNote = tester.getRect(quickNoteButton());
-    final jump = tester.getRect(find.byType(ScrollJumpButton));
-
-    expect(fab.bottom, lessThan(quickNote.bottom), reason: 'FAB 在最下面');
-    expect(
-      quickNote.bottom,
-      lessThan(jump.bottom),
-      reason: '速记是按钮列第二颗，应在「到顶/到底」下方',
+    // 量尺寸必须找按钮整体（Semantics 上的 key），byIcon 只会量到 24px 图标
+    final quickNote = tester.getRect(
+      find.byKey(const ValueKey('quick_note_button')),
     );
-    // 三者等宽等高（同一套规格常量）
-    expect(quickNote.width, closeTo(fab.width, 0.01));
-    expect(jump.width, closeTo(fab.width, 0.01));
-    expect(quickNote.height, closeTo(fab.height, 0.01));
+    final timer = tester.getRect(find.byKey(const ValueKey('timer_button')));
+
+    // y 轴向下：越靠屏幕下方 bottom 越大 —— FAB 在最下面，bottom 应最大；
+    // 计时段在速记之上。
+    expect(
+      timer.bottom,
+      lessThan(quickNote.bottom),
+      reason: '速记是 dock 最下段，应在计时段下方',
+    );
+    // 等宽等高（同一套规格常量）
+    expect(timer.width, closeTo(_buttonSideForTest, 0.01));
+    expect(quickNote.height, closeTo(_buttonSideForTest, 0.01));
+    expect(timer.height, closeTo(_buttonSideForTest, 0.01));
 
     await drainStreamTeardown(tester);
   });

@@ -65,6 +65,7 @@ class RecordSnapshot {
         'updatedAt': r.updatedAt.toIso8601String(),
         'deleted': r.deleted,
         'deletedAt': r.deletedAt?.toIso8601String(),
+        'durationS': r.durationS,
       };
 
   /// 单条解析；缺关键字段或类型不对时返回 null（跳过这一条）。
@@ -87,6 +88,12 @@ class RecordSnapshot {
         : const <String>[];
 
     final title = row['title'];
+    // 时长不在就不还原（null = 没记时长）。旧版快照存的是分钟
+    // （durationMin 键），读进来 ×60 换算成秒。
+    final rawDuration = row['durationS'] ?? row['durationMin'];
+    final durationS = rawDuration is int
+        ? (row['durationS'] == null ? rawDuration * 60 : rawDuration)
+        : null;
     return RecordEntity(
       id: id,
       title: title is String ? title : null,
@@ -97,6 +104,7 @@ class RecordSnapshot {
       updatedAt: updatedAt,
       deleted: row['deleted'] == true,
       deletedAt: _time(row['deletedAt']),
+      durationS: durationS,
     );
   }
 

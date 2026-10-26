@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:vestige/app/theme.dart';
 import 'package:vestige/domain/record_selection.dart';
+import 'package:vestige/presentation/widgets/empty_state.dart';
 import 'package:vestige/presentation/providers/records_provider.dart';
 import 'package:vestige/presentation/widgets/record_card.dart';
 
@@ -75,13 +75,13 @@ class _TrashScreenState extends ConsumerState<TrashScreen> {
                 // 「已选 0 条」时置灰：多选态现在能停在 0 条上，
                 // 不置灰的话点「彻底删除」会弹一个「0 条记录将被永久删除」的确认框。
                 IconButton(
-                  icon: const Icon(Icons.restore),
+                  icon: const Icon(Icons.restore_rounded),
                   tooltip: '恢复',
                   onPressed: _selection.isEmpty ? null : _restoreSelection,
                 ),
                 IconButton(
                   icon: Icon(
-                    Icons.delete_forever_outlined,
+                    Icons.delete_forever_rounded,
                     color: Theme.of(context).colorScheme.error,
                   ),
                   tooltip: '彻底删除',
@@ -90,7 +90,7 @@ class _TrashScreenState extends ConsumerState<TrashScreen> {
                 // 取消选择的出口（左侧让给全选框了），也是**按钮里**唯一能退出多选态的那个
                 // （另一个出口是系统返回，见 build 末尾的 [PopScope]）。
                 IconButton(
-                  icon: const Icon(Icons.close),
+                  icon: const Icon(Icons.close_rounded),
                   tooltip: '取消选择',
                   onPressed: _exitSelection,
                 ),
@@ -98,7 +98,7 @@ class _TrashScreenState extends ConsumerState<TrashScreen> {
             : <Widget>[
                 if (records.isNotEmpty)
                   IconButton(
-                    icon: const Icon(Icons.delete_sweep_outlined),
+                    icon: const Icon(Icons.delete_sweep_rounded),
                     tooltip: '清空回收站',
                     onPressed: _confirmEmptyTrash,
                   ),
@@ -243,7 +243,18 @@ class _TrashScreenState extends ConsumerState<TrashScreen> {
       ..hideCurrentSnackBar()
       ..showSnackBar(
         SnackBar(
-          content: Text(message),
+          // 撤销类提示统一带主色撤销图标（与首页同一套分级）。
+          content: Row(
+            children: <Widget>[
+              Icon(
+                Icons.undo_rounded,
+                size: 18,
+                color: Theme.of(context).colorScheme.primary,
+              ),
+              const SizedBox(width: 10),
+              Expanded(child: Text(message)),
+            ],
+          ),
           duration: const Duration(seconds: 3),
           persist: false,
           action: SnackBarAction(label: '撤销', onPressed: _undoLatest),
@@ -278,7 +289,11 @@ class _TrashNotice extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(4, 4, 4, 12),
       child: Row(
         children: <Widget>[
-          Icon(Icons.info_outline, size: 15, color: scheme.onSurfaceVariant),
+          Icon(
+            Icons.info_outline_rounded,
+            size: 15,
+            color: scheme.onSurfaceVariant,
+          ),
           const SizedBox(width: 6),
           Expanded(
             child: Text(
@@ -299,41 +314,12 @@ class _TrashEmpty extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final scheme = theme.colorScheme;
-    final surfaces = VestigeSurfaces.of(context);
-
+    // 空态收敛到共用组件（文案保持原样）。
     return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: <Widget>[
-          // 与首页空态同一套写法：图标坐进圆盘，空态才不像「加载失败」。
-          Container(
-            width: 84,
-            height: 84,
-            decoration: BoxDecoration(
-              color: surfaces.inset,
-              shape: BoxShape.circle,
-              border: Border.all(color: surfaces.border),
-            ),
-            child: Icon(Icons.delete_outline, size: 34, color: scheme.outline),
-          ),
-          const SizedBox(height: 16),
-          Text(
-            '回收站是空的',
-            style: theme.textTheme.bodyLarge?.copyWith(
-              color: scheme.onSurface,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            '删掉的记录会先落到这里，可以随时恢复',
-            style: theme.textTheme.labelSmall?.copyWith(
-              color: scheme.onSurfaceVariant,
-            ),
-          ),
-        ],
+      child: VestigeEmptyState(
+        icon: Icons.delete_outline_rounded,
+        title: '回收站是空的',
+        subtitle: '删掉的记录会先落到这里，可以随时恢复',
       ),
     );
   }

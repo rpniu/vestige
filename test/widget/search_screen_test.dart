@@ -163,7 +163,7 @@ void main() {
     await tester.tap(
       find.descendant(
         of: find.widgetWithText(InputChip, '咖啡'),
-        matching: find.byIcon(Icons.close),
+        matching: find.byIcon(Icons.close_rounded),
       ),
     );
     await tester.pumpAndSettle();

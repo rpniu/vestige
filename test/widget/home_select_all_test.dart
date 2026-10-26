@@ -114,9 +114,9 @@ void main() {
           ),
         )
         .onPressed;
-    expect(actionOf(Icons.undo), isNull, reason: '0 选中时「日期减一天」应置灰');
-    expect(actionOf(Icons.redo), isNull, reason: '0 选中时「日期加一天」应置灰');
-    expect(actionOf(Icons.delete_outline), isNull, reason: '0 选中时「移入回收站」应置灰');
+    expect(actionOf(Icons.keyboard_double_arrow_left_rounded), isNull, reason: '0 选中时「日期减一天」应置灰');
+    expect(actionOf(Icons.keyboard_double_arrow_right_rounded), isNull, reason: '0 选中时「日期加一天」应置灰');
+    expect(actionOf(Icons.delete_rounded), isNull, reason: '0 选中时「移入回收站」应置灰');
 
     // 「取消选择」才是退出多选的出口
     await tester.tap(find.byTooltip('取消选择'));

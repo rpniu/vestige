@@ -55,12 +55,12 @@ void main() {
     expect(records.single.data['content'], '老的记录');
   });
 
-  test('迁移后 schema 版本升到 4', () async {
+  test('迁移后 schema 版本升到当前版本（含 v6 的 duration_s）', () async {
     await seedAsV3();
     final db = VestigeDatabase(NativeDatabase(dbFile));
     addTearDown(db.close);
 
     final version = await db.customSelect('PRAGMA user_version').getSingle();
-    expect(version.data.values.first, 4);
+    expect(version.data.values.first, 6);
   });
 }
