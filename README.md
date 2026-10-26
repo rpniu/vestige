@@ -46,10 +46,6 @@ flutter test
 
 推 `v1.2.3[+N]` 形式的 tag 触发 GitHub Actions：先跑 analyze + test，通过后自动签名打 APK 并发布 Release（签名密钥走仓库 Secrets，不入库）。
 
-## 文档
-
-- [深入的项目学习文档（架构 / 数据模型 / 设计取舍）](temp/guide/PROJECT_NOTES.md)
-
 ## License
 
 [MIT](LICENSE)
