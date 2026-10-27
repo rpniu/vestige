@@ -16,6 +16,7 @@ import 'package:vestige/presentation/screens/home_screen.dart';
 import 'package:vestige/presentation/widgets/record_card.dart';
 
 RecordEntity _record(String id, DateTime day) => RecordEntity(
+      bookId: 'default',
       id: id,
       content: '第 $id 条',
       tags: const <String>[],
@@ -75,6 +76,7 @@ void main() {
     final now = DateTime.now();
     await _pumpHome(tester, <RecordEntity>[
       RecordEntity(
+        bookId: 'default',
         id: 'backfilled',
         content: '1',
         tags: const <String>[],
@@ -95,6 +97,28 @@ void main() {
     expect(find.text('还没有记录'), findsOneWidget);
     expect(find.text(fullDateLabel(DateTime.now())), findsOneWidget);
     expect(find.text('还没有任何记录'), findsOneWidget); // 空状态本身还在
+  });
+
+  testWidgets('AppBar 右侧只剩一个展开按钮，点开列出各功能', (tester) async {
+    await _pumpHome(tester, <RecordEntity>[_record('a', _dayOffset(0))]);
+
+    // 单个图标按钮（⋮），其余入口不再平铺
+    expect(find.byTooltip('更多'), findsOneWidget);
+    expect(find.byTooltip('搜索'), findsNothing);
+    expect(find.byTooltip('回收站'), findsNothing);
+    expect(find.byIcon(Icons.delete_sweep_rounded), findsNothing);
+
+    await tester.tap(find.byTooltip('更多'));
+    await tester.pumpAndSettle();
+
+    // 菜单里是「图标 + 文字」的低频动作列表；
+    // 「记一笔」不在里面 —— 它是主操作，在右下角 FAB 上（一键进编辑页）
+    expect(find.text('记一笔'), findsNothing);
+    expect(find.text('开始计时'), findsOneWidget);
+    expect(find.text('切换记录本'), findsOneWidget);
+    expect(find.text('搜索'), findsOneWidget);
+    // 一个标签都没有时不出「按标签筛选」
+    expect(find.text('按标签筛选'), findsNothing);
   });
 
   testWidgets('长按进入多选后，标题让位给「已选 N 条」，日期与间隔都消失', (tester) async {

@@ -22,6 +22,7 @@ RecordEntity _rec(
   List<String> tags = const <String>[],
 }) =>
     RecordEntity(
+      bookId: 'default',
       id: id,
       title: null,
       content: '第 $id 条',
@@ -142,13 +143,8 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('已选 0 条'), findsOneWidget);
 
-    expect(
-      tester
-          .widget<IconButton>(
-            find.widgetWithIcon(IconButton, Icons.sell_rounded),
-          )
-          .onPressed,
-      isNull,
-    );
+    // 标签筛选入口在展开菜单里；多选态下菜单整体让位给批量操作，
+    // 所以「多选时不能改筛选」这条约束仍然成立，只是表现成「菜单不在」。
+    expect(find.byTooltip('更多'), findsNothing);
   });
 }

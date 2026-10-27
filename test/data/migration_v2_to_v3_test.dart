@@ -102,6 +102,6 @@ void main() {
     final version = await db.customSelect('PRAGMA user_version').getSingle();
     // 每次加迁移都要跟着改这个数字 —— 这正是它的用处：
     // 提醒你「改 schema 了」，而不是让断言悄悄跟着飘。
-    expect(version.data.values.first, 6);
+    expect(version.data.values.first, VestigeDatabase.currentSchemaVersion);
   });
 }

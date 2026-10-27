@@ -11,6 +11,7 @@ RecordEntity _record({
   String? title,
 }) =>
     RecordEntity(
+      bookId: 'default',
       id: id,
       title: title,
       content: content,

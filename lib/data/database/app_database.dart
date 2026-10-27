@@ -1,8 +1,10 @@
 import 'package:drift/drift.dart';
 import 'package:uuid/uuid.dart';
+import 'package:vestige/domain/record_book.dart';
 
 import 'connection/native.dart';
 import 'record.dart';
+import 'record_book_table.dart';
 import 'record_dao.dart';
 import 'undo_entry.dart';
 
@@ -30,8 +32,14 @@ part 'app_database.g.dart';
 /// - v6：时长单位从分钟改成秒 —— 加 duration_s，把 duration_min ×60 搬进去。
 ///   duration_min 列**留在表里不再使用**（SQLite DROP COLUMN 在老引擎上
 ///   不可靠，不值得为删一列冒迁移风险）；新读写只认 duration_s。
+/// - v7：记录本（多数据空间）。新增 record_books 表；records / undo_entries
+///   各加 book_id（外键 → record_books.id，ON DELETE CASCADE），
+///   既有行一律回填 `default`（= 升级前那批数据归入默认记录本）。
+///   两条外键都要「新列 + 约束」同时生效，而 SQLite **不允许**
+///   `ALTER TABLE ... ADD COLUMN ... REFERENCES`（除非默认值为 NULL），
+///   所以这两张表在升级路径上是**重建**的：建新表 → 拷数据 → 丢旧表 → 改名 → 补索引。
 @DriftDatabase(
-  tables: [Records, UndoEntries],
+  tables: [Records, UndoEntries, RecordBooks],
   daos: [RecordDao],
 )
 class VestigeDatabase extends _$VestigeDatabase {
@@ -39,8 +47,12 @@ class VestigeDatabase extends _$VestigeDatabase {
   /// 也允许外部注入 executor（测试 / 预览时方便）。
   VestigeDatabase([QueryExecutor? executor]) : super(executor ?? connect());
 
+  /// 当前 schema 版本（公开常量，便于测试与排查直接引用，
+  /// 不必每次升版都去改断言里的字面量）。
+  static const int currentSchemaVersion = 7;
+
   @override
-  int get schemaVersion => 6;
+  int get schemaVersion => currentSchemaVersion;
 
   /// 表里是否已有某一列。
   ///
@@ -143,10 +155,123 @@ class VestigeDatabase extends _$VestigeDatabase {
               'WHERE duration_s IS NULL AND duration_min IS NOT NULL',
             );
           }
+          if (from < 7) {
+            await _migrateToRecordBooks();
+          }
         },
         beforeOpen: (details) async {
-          // 打开外键约束（本项目暂无关联表，留作后续扩展的钩子）
+          // 打开外键约束 —— records / undo_entries 的 book_id 指向 record_books，
+          // 不打开这个 pragma，级联删除与「拒绝孤儿行」都不会生效。
           await customStatement('PRAGMA foreign_keys = ON');
+          // 默认记录本这一行是**外键的落脚点**：没有它，任何一条
+          // `book_id = default` 的写入都会被拒绝。放在这里而不是交给上层，
+          // 是因为「谁先读库」不确定（首页、导入、测试都可能先碰到库）。
+          // INSERT OR IGNORE：每次打开都执行，幂等。
+          await customStatement(
+            'INSERT OR IGNORE INTO record_books (id, name, created_at) '
+            "VALUES ('$kDefaultBookId', '$kDefaultBookName', "
+            "CAST(strftime('%s','now') AS INTEGER))",
+          );
         },
       );
+
+  /// v7：引入记录本表，并把既有数据归入默认记录本。
+  ///
+  /// 每一步都先探测再动手，因此对「结构已新、版本号滞后」的库是幂等的
+  /// （同 [_columnExists] 的说明）。
+  ///
+  /// 为什么 `records` / `undo_entries` 在升级路径上是**重建**而不是
+  /// `ALTER TABLE ADD COLUMN`：SQLite 不允许给既有表添加带 `REFERENCES`
+  /// 且默认值非 NULL 的列 —— 而这里既要有 `NOT NULL DEFAULT 'default'`、
+  /// 又要挂 `ON DELETE CASCADE` 外键。重建顺便把 v5 遗留的 `duration_min`
+  /// 列清掉（它的数据在 v6 已搬进 `duration_s`，drift 的 schema 里也没有它）。
+  Future<void> _migrateToRecordBooks() async {
+    if (!await _tableExists('record_books')) {
+      await customStatement(
+        'CREATE TABLE "record_books" ('
+        '"id" TEXT NOT NULL, '
+        '"name" TEXT NOT NULL, '
+        '"created_at" INTEGER NOT NULL, '
+        'PRIMARY KEY ("id"))',
+      );
+    }
+    // 默认记录本这一行必须存在：下面回填的 book_id 要指向它，否则外键不成立。
+    // 时间是 drift 的存储格式（Unix 秒），交给 SQLite 自己取当前时刻。
+    await customStatement(
+      'INSERT OR IGNORE INTO record_books (id, name, created_at) '
+      "VALUES ('$kDefaultBookId', '$kDefaultBookName', "
+      "CAST(strftime('%s','now') AS INTEGER))",
+    );
+
+    if (!await _columnExists('records', 'book_id')) {
+      await customStatement(
+        'CREATE TABLE "records_v7" ('
+        '"book_id" TEXT NOT NULL DEFAULT \'$kDefaultBookId\' '
+        'REFERENCES "record_books" ("id") ON DELETE CASCADE, '
+        '"id" TEXT NOT NULL, '
+        '"title" TEXT NULL, '
+        '"content" TEXT NOT NULL, '
+        '"tags" TEXT NOT NULL, '
+        '"recorded_at" INTEGER NOT NULL, '
+        '"created_at" INTEGER NOT NULL, '
+        '"updated_at" INTEGER NOT NULL, '
+        '"deleted" INTEGER NOT NULL DEFAULT 0 CHECK ("deleted" IN (0, 1)), '
+        '"deleted_at" INTEGER NULL, '
+        '"duration_s" INTEGER NULL, '
+        'PRIMARY KEY ("id"))',
+      );
+      // 列名显式写全：老库可能缺 duration_s（v5 及更早），逐列探测比
+      // 「假定结构」安全 —— 少一列总比整次升级失败（App 打不开）强。
+      final columns = <String>[
+        if (await _columnExists('records', 'title')) 'title',
+        'content',
+        if (await _columnExists('records', 'tags')) 'tags',
+        if (await _columnExists('records', 'recorded_at')) 'recorded_at',
+        'created_at',
+        if (await _columnExists('records', 'updated_at')) 'updated_at',
+        if (await _columnExists('records', 'deleted')) 'deleted',
+        if (await _columnExists('records', 'deleted_at')) 'deleted_at',
+        if (await _columnExists('records', 'duration_s')) 'duration_s',
+      ];
+      await customStatement(
+        'INSERT INTO "records_v7" (book_id, id, ${columns.join(', ')}) '
+        "SELECT '$kDefaultBookId', id, ${columns.join(', ')} FROM records",
+      );
+      await customStatement('DROP TABLE records');
+      await customStatement('ALTER TABLE "records_v7" RENAME TO records');
+    }
+    // 索引随旧表一起没了（DROP TABLE 会删掉它的索引），这里统一补回。
+    // 全新安装的索引由 createAll() 建，语句相同，IF NOT EXISTS 两边都安全。
+    for (final sql in <String>[
+      'CREATE INDEX IF NOT EXISTS idx_recorded_at ON records (recorded_at)',
+      'CREATE INDEX IF NOT EXISTS idx_deleted ON records (deleted)',
+      'CREATE INDEX IF NOT EXISTS idx_book_recorded_at '
+          'ON records (book_id, recorded_at)',
+    ]) {
+      await customStatement(sql);
+    }
+
+    if (!await _columnExists('undo_entries', 'book_id')) {
+      await customStatement(
+        'CREATE TABLE "undo_entries_v7" ('
+        '"book_id" TEXT NOT NULL DEFAULT \'$kDefaultBookId\' '
+        'REFERENCES "record_books" ("id") ON DELETE CASCADE, '
+        '"id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, '
+        '"label" TEXT NOT NULL, '
+        '"created_at" INTEGER NOT NULL, '
+        '"snapshot" TEXT NOT NULL, '
+        '"record_count" INTEGER NOT NULL)',
+      );
+      await customStatement(
+        'INSERT INTO "undo_entries_v7" '
+        '(book_id, id, label, created_at, snapshot, record_count) '
+        "SELECT '$kDefaultBookId', id, label, created_at, snapshot, record_count "
+        'FROM undo_entries',
+      );
+      await customStatement('DROP TABLE undo_entries');
+      await customStatement(
+        'ALTER TABLE "undo_entries_v7" RENAME TO undo_entries',
+      );
+    }
+  }
 }

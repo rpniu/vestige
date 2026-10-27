@@ -6,7 +6,7 @@ import 'package:vestige/data/database/connection/native.dart';
 
 /// 首页浮动按钮列的左右位置配置。
 ///
-/// 三颗按钮（记一笔 FAB / 速记 / 到顶到底）作为**一整列**停靠在同一侧，
+/// 浮动按钮（记一笔 / 计时 / 到底）**停靠在同一侧**，
 /// 配置只有一个键。文件：`<数据目录>/config/home_buttons.json`（数据目录的
 /// 解析规则与数据库一致：环境变量 [dataDirEnvKey] 优先，否则 `<文档>/vestige/`）。
 ///

@@ -10,6 +10,7 @@ import 'package:vestige/data/config/home_layout_config.dart';
 import 'package:vestige/domain/csv_util.dart';
 import 'package:vestige/presentation/providers/home_layout_provider.dart';
 import 'package:vestige/presentation/providers/package_info_provider.dart';
+import 'package:vestige/presentation/providers/record_book_provider.dart';
 import 'package:vestige/presentation/providers/records_provider.dart';
 import 'package:vestige/presentation/providers/theme_provider.dart';
 import 'package:vestige/presentation/services/csv_file.dart';
@@ -58,6 +59,10 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     // 头卡改为显示失败，数据管理入口照旧可用（导出/导入会自己报错）。
     final recordsFailed = ref.watch(recordsProvider).hasError;
     final layout = ref.watch(homeButtonLayoutProvider);
+    // 记录本名字与总数读的是偏好里的缓存（不碰数据库 —— 这一行不值得为它开库）
+    final activeBook = ref.watch(activeBookProvider);
+    final bookName = activeBook.name;
+    final bookCount = activeBook.count;
 
     return Scaffold(
       appBar: AppBar(title: const Text('我的')),
@@ -117,7 +122,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                       icon: Icons.switch_access_shortcut_rounded,
                     ),
                     title: side == ButtonSide.left ? '靠左' : '靠右',
-                    subtitle: i == 0 ? '「记一笔」与速记 / 计时胶囊停靠的屏幕侧' : null,
+                    subtitle: i == 0 ? '「记一笔」、计时胶囊与「到底」按钮停靠的屏幕侧' : null,
                     selected: layout == side,
                     onTap: () => ref
                         .read(homeButtonLayoutProvider.notifier)
@@ -125,6 +130,22 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                   ),
                 ],
               ],
+            ),
+          ),
+          const SizedBox(height: 24),
+
+          _SectionTitle('记录本'),
+          Card(
+            child: _ActionTile(
+              icon: Icons.auto_stories_rounded,
+              // 直接显示当前记录本的名字：切换是不常见的操作，
+              // 但「我现在在哪一本上」是随时可能要确认的信息。
+              title: bookName,
+              subtitle: bookCount > 1
+                  ? '共 $bookCount 个记录本 · 点此切换'
+                  : '点此新建记录本或切换到其它一本',
+              enabled: !_busy,
+              onTap: () => context.push(AppRoutes.recordBooks),
             ),
           ),
           const SizedBox(height: 24),

@@ -19,6 +19,7 @@ RecordEntity _record({
   List<String> tags = const <String>[],
 }) =>
     RecordEntity(
+      bookId: 'default',
       id: id,
       title: title,
       content: content,

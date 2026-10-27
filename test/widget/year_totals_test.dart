@@ -29,6 +29,7 @@ final int _year = DateTime.now().year;
 RecordEntity _record(int i, int year, int month, int day) {
   final at = DateTime(year, month, day, 9);
   return RecordEntity(
+    bookId: 'default',
     id: 'id-$i',
     content: '第 $i 条',
     tags: const <String>[],

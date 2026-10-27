@@ -37,6 +37,7 @@ void main() {
   }) {
     final now = recordedAt ?? DateTime(2026, 10, 1, 9);
     return RecordEntity(
+      bookId: 'default',
       id: id,
       title: null,
       content: content,

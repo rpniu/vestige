@@ -2,6 +2,8 @@ import 'dart:convert';
 
 import 'package:drift/drift.dart';
 import 'package:uuid/uuid.dart';
+import 'package:vestige/data/database/record_book_table.dart';
+import 'package:vestige/domain/record_book.dart';
 
 /// 记录表 —— **v2 重新设计版**（对应原 Kotlin 的 RecordEntity）。
 ///
@@ -31,8 +33,20 @@ import 'package:uuid/uuid.dart';
 /// | 「补记」标记 / 审计       | createdAt     |
 @TableIndex(name: 'idx_deleted', columns: {#deleted})
 @TableIndex(name: 'idx_recorded_at', columns: {#recordedAt})
+@TableIndex(name: 'idx_book_recorded_at', columns: {#bookId, #recordedAt})
 @DataClassName('RecordEntity')
 class Records extends Table {
+  /// 所属记录本，外键指向 [RecordBooks]。
+  ///
+  /// 默认值 `default` 不是「猜的」：v7 迁移给所有既有记录回填的就是它，
+  /// 于是老库升级后全部归入默认记录本，界面看到的就是原来那批数据。
+  ///
+  /// `ON DELETE CASCADE`：删掉一本记录本时，它的记录随之删除 ——
+  /// 不留孤儿行，也不必让上层记得「先删记录再删本」。
+  TextColumn get bookId => text()
+      .withDefault(const Constant(kDefaultBookId))
+      .references(RecordBooks, #id, onDelete: KeyAction.cascade)();
+
   /// 主键：UUID 字符串。插入未显式指定则自动生成，
   /// 等价于原 Kotlin 的 `val id: UUID = UUID.randomUUID()`。
   /// 用 String 而非 Uuid 列：路由参数、CSV 导入导出全是 String，省一层转换。

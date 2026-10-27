@@ -16,6 +16,7 @@ import 'package:vestige/presentation/screens/edit_screen.dart';
 RecordEntity _rec(String id, List<String> tags) {
   final now = DateTime.now();
   return RecordEntity(
+    bookId: 'default',
     id: id,
     title: null,
     content: '1',

@@ -61,8 +61,11 @@ void main() {
       if (tmp.existsSync()) tmp.deleteSync(recursive: true);
     });
 
+    // 这一组只验证「任意目录都能读写库」，文件名与真实布局无关
+    const fileName = 'data.sqlite';
+
     test('库文件落在指定目录，能正常写入并读回', () async {
-      final file = File('${tmp.path}/$databaseFileName');
+      final file = File('${tmp.path}/$fileName');
       final db = VestigeDatabase(NativeDatabase(file));
       final repo = RecordRepository(db.recordDao);
 
@@ -82,14 +85,14 @@ void main() {
       expect(nested.existsSync(), isFalse);
 
       nested.createSync(recursive: true);
-      final db = VestigeDatabase(NativeDatabase(File('${nested.path}/$databaseFileName')));
+      final db = VestigeDatabase(NativeDatabase(File('${nested.path}/$fileName')));
       await RecordRepository(db.recordDao).addRecord(content: '1');
-      expect(File('${nested.path}/$databaseFileName').existsSync(), isTrue);
+      expect(File('${nested.path}/$fileName').existsSync(), isTrue);
       await db.close();
     });
 
     test('同一份库文件被重新打开时数据还在（模拟换系统后再开）', () async {
-      final file = File('${tmp.path}/$databaseFileName');
+      final file = File('${tmp.path}/$fileName');
 
       final first = VestigeDatabase(NativeDatabase(file));
       await RecordRepository(first.recordDao).addRecord(content: '留下的一条');
@@ -103,7 +106,7 @@ void main() {
     });
   });
 
-  group('resolveDatabaseFile · 收进 vestige 子目录', () {
+  group('resolveDatabaseFile · 库收进 databases/', () {
     late Directory docs;
 
     setUp(() => docs = Directory.systemTemp.createTempSync('vestige_docs_'));
@@ -117,57 +120,143 @@ void main() {
           env: env,
         );
 
-    test('默认位置是 <文档>/vestige/vestige.sqlite，不再散在文档目录根下', () async {
+    /// 期望位置：`<文档>/vestige/databases/vestige.sqlite`
+    String databasesDir() =>
+        '${docs.path}/$dataSubDirName/$databasesSubDirName';
+
+    test('库文件在 <文档>/vestige/databases/vestige.sqlite', () async {
       final file = await resolve(env: const <String, String>{});
-      expect(file.path, endsWith('/$dataSubDirName/$databaseFileName'));
-      expect(Directory('${docs.path}/$dataSubDirName').existsSync(), isTrue);
+      expect(file.path, '${databasesDir()}/$databaseFileName');
+      expect(Directory(databasesDir()).existsSync(), isTrue);
       expect(file.existsSync(), isFalse, reason: '解析路径不该顺手把库建出来');
     });
 
-    test('旧位置有库、新位置没有 → 自动搬进子目录（升级不能看到空数据）', () async {
-      final legacy = File('${docs.path}/$databaseFileName');
-      legacy.writeAsStringSync('这是老用户的库');
+    test('老位置（数据目录根的 vestige.sqlite）→ 搬进 databases/', () async {
+      final legacy = File('${docs.path}/$dataSubDirName/$databaseFileName')
+        ..createSync(recursive: true)
+        ..writeAsStringSync('上一版的库');
 
-      final file = await resolve(env: const <String, String>{});
+      final file = await resolve();
 
-      expect(file.existsSync(), isTrue, reason: '库应该已经被搬到新位置');
-      expect(file.readAsStringSync(), '这是老用户的库', reason: '内容必须原样保留');
-      expect(legacy.existsSync(), isFalse, reason: '同一分区内应该是移动，不是复制');
+      expect(file.readAsStringSync(), '上一版的库', reason: '内容必须原样保留');
+      expect(legacy.existsSync(), isFalse, reason: '应该搬走，不在原处留副本');
     });
 
-    test('新旧位置都有库 → 不动新的，也不覆盖（避免把当前数据冲掉）', () async {
-      final legacy = File('${docs.path}/$databaseFileName')..writeAsStringSync('旧的');
-      final target = Directory('${docs.path}/$dataSubDirName')..createSync();
-      File('${target.path}/$databaseFileName').writeAsStringSync('当前在用的');
+    test('更早的位置（文档目录根的 vestige.sqlite）→ 一步搬进 databases/', () async {
+      final legacy = File('${docs.path}/$databaseFileName')
+        ..writeAsStringSync('最早那一版的库');
 
-      final file = await resolve(env: const <String, String>{});
+      final file = await resolve();
 
-      expect(file.readAsStringSync(), '当前在用的');
-      expect(legacy.existsSync(), isTrue, reason: '两份都在时保持原样，不做破坏性动作');
+      expect(file.path, '${databasesDir()}/$databaseFileName');
+      expect(file.readAsStringSync(), '最早那一版的库');
+      expect(legacy.existsSync(), isFalse);
     });
 
-    test('没有旧文件时不报错，也不会造出空文件', () async {
+    test('两个老位置都有 → 只搬较新的那个，另一个原地不动', () async {
+      final older = File('${docs.path}/$databaseFileName')..writeAsStringSync('最早');
+      final newer = File('${docs.path}/$dataSubDirName/$databaseFileName')
+        ..createSync(recursive: true)
+        ..writeAsStringSync('较新');
+
+      final file = await resolve();
+
+      expect(file.readAsStringSync(), '较新');
+      expect(newer.existsSync(), isFalse);
+      expect(older.existsSync(), isTrue, reason: '没被选中的那份不做破坏性处理');
+    });
+
+    test('目标已存在 → 不动它，也不动老文件（绝不覆盖）', () async {
+      final target = File('${databasesDir()}/$databaseFileName')
+        ..createSync(recursive: true)
+        ..writeAsStringSync('当前在用的');
+      final legacy = File('${docs.path}/$dataSubDirName/$databaseFileName')
+        ..writeAsStringSync('旧的');
+
+      final file = await resolve();
+
+      expect(file.path, target.path);
+      expect(target.readAsStringSync(), '当前在用的');
+      expect(legacy.existsSync(), isTrue, reason: '两份都在时保持原样');
+    });
+
+    test('搬家带上 -wal / -shm（只搬主文件会丢最近写入）', () async {
+      final root = Directory('${docs.path}/$dataSubDirName')..createSync();
+      for (final suffix in <String>['', '-wal', '-shm']) {
+        File('${root.path}/$databaseFileName$suffix').writeAsStringSync('x$suffix');
+      }
+
+      final file = await resolve();
+
+      for (final suffix in <String>['', '-wal', '-shm']) {
+        expect(File('${file.path}$suffix').readAsStringSync(), 'x$suffix');
+        expect(
+          File('${root.path}/$databaseFileName$suffix').existsSync(),
+          isFalse,
+          reason: '伴生文件也要搬走，不能在原位置留半套',
+        );
+      }
+    });
+
+    test('搬完之后打开的是同一份数据（真实 sqlite 文件）', () async {
+      final legacy = File('${docs.path}/$dataSubDirName/$databaseFileName')
+        ..createSync(recursive: true);
+
+      final oldDb = VestigeDatabase(NativeDatabase(legacy));
+      await RecordRepository(oldDb.recordDao).addRecord(
+        content: '升级前的记录',
+        recordedAt: DateTime(2026, 9, 1, 10),
+      );
+      await oldDb.close();
+
+      final file = await resolve();
+      expect(file.existsSync(), isTrue, reason: '老库应该已经被搬进 databases/');
+
+      final newDb = VestigeDatabase(NativeDatabase(file));
+      final all = await RecordRepository(newDb.recordDao)
+          .getAllActiveRecordsSync();
+      expect(all.single.content, '升级前的记录');
+      await newDb.close();
+    });
+
+    test('没有旧文件时不报错，也不会造出空库', () async {
       final file = await resolve(env: const <String, String>{});
       expect(file.existsSync(), isFalse);
     });
 
-    test('设置了环境变量 → 用指定目录，且不碰默认目录', () async {
-      final legacy = File('${docs.path}/$databaseFileName')..writeAsStringSync('不该被搬走');
+    test('设置了环境变量 → 用指定目录下的 databases/，且不碰默认目录', () async {
+      final legacy = File('${docs.path}/$databaseFileName')
+        ..writeAsStringSync('不该被搬走');
       final custom = Directory('${docs.path}/shared-data');
 
       final file = await resolve(
         env: <String, String>{dataDirEnvKey: custom.path},
       );
 
-      expect(file.path, '${custom.path}/$databaseFileName');
+      expect(file.path, '${custom.path}/$databasesSubDirName/$databaseFileName');
       expect(custom.existsSync(), isTrue, reason: '指定目录不存在时应被创建');
-      expect(legacy.existsSync(), isTrue, reason: '用户已指定位置，默认目录不该被动');
+      expect(legacy.existsSync(), isTrue, reason: '用户已指定位置，文档目录不该被动');
       expect(Directory('${docs.path}/$dataSubDirName').existsSync(), isFalse);
     });
 
-    test('环境变量为空白 → 退回默认子目录位置，不是当前工作目录', () async {
+    test('指定目录里上一版的 vestige.sqlite 同样会被搬进 databases/', () async {
+      final custom = Directory('${docs.path}/shared-data')..createSync();
+      final legacy = File('${custom.path}/$databaseFileName')
+        ..writeAsStringSync('共享目录里的老库');
+
+      final file = await resolve(env: <String, String>{dataDirEnvKey: custom.path});
+
+      expect(
+        file.path,
+        '${custom.path}/$databasesSubDirName/$databaseFileName',
+      );
+      expect(file.readAsStringSync(), '共享目录里的老库');
+      expect(legacy.existsSync(), isFalse);
+    });
+
+    test('环境变量为空白 → 退回默认数据目录，不是当前工作目录', () async {
       final file = await resolve(env: const <String, String>{dataDirEnvKey: '   '});
-      expect(file.path, '${docs.path}/$dataSubDirName/$databaseFileName');
+      expect(file.path, '${databasesDir()}/$databaseFileName');
     });
   });
 }

@@ -23,6 +23,7 @@ RecordEntity _rec(
   List<String> tags = const <String>[],
 }) =>
     RecordEntity(
+      bookId: 'default',
       id: id,
       title: null,
       content: '第 $id 条',
@@ -101,9 +102,9 @@ void main() {
     expect(_selectAllBox(), findsOneWidget);
     expect(tester.widget<Checkbox>(_selectAllBox()).value, isFalse);
     expect(find.text('已选 0 条'), findsOneWidget);
-    // FAB 已改成 56×56 正方形、只留「+」图标（和「到顶/到底」按钮等大），
-    // 不再有「记一笔」文字，所以这里按类型断言。
-    expect(find.byType(FloatingActionButton), findsNothing);
+    // 多选态下 AppBar 的展开菜单让位给批量操作按钮，「记一笔」也收起
+    expect(find.byTooltip('更多'), findsNothing);
+    expect(find.byKey(const ValueKey('fab_button')), findsNothing);
 
     // 0 选中时三个批量按钮必须置灰，否则会拿着空 id 列表跑一遍
     VoidCallback? actionOf(IconData icon) => tester
@@ -122,7 +123,9 @@ void main() {
     await tester.tap(find.byTooltip('取消选择'));
     await tester.pumpAndSettle();
     expect(_selectAllBox(), findsNothing);
-    expect(find.byType(FloatingActionButton), findsOneWidget);
+    // 退出多选：展开菜单与「记一笔」都回来了
+    expect(find.byTooltip('更多'), findsOneWidget);
+    expect(find.byKey(const ValueKey('fab_button')), findsOneWidget);
   });
 
   testWidgets('手动取消勾选最后一条：同样只清勾选，不退出多选态', (tester) async {
@@ -155,7 +158,9 @@ void main() {
     expect(find.byType(RecordCard), findsNWidgets(4));
 
     // 先按「咖啡」筛选 → 只剩 3 条
-    await tester.tap(find.byTooltip('按标签筛选'));
+    await tester.tap(find.byTooltip('更多'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('按标签筛选'));
     await tester.pumpAndSettle();
     await tester.tap(find.widgetWithText(ListTile, '#咖啡'));
     await tester.pumpAndSettle();

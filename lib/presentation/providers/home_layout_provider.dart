@@ -3,7 +3,7 @@ import 'package:vestige/data/config/home_layout_config.dart';
 
 /// 首页按钮列停靠边配置（`<数据目录>/config/home_buttons.json`）。
 ///
-/// 三颗按钮（记一笔 / 速记 / 到顶到底）作为一整列停靠同侧，state 就是
+/// 浮动按钮（记一笔 / 计时 / 到底）停靠同一侧，state 就是
 /// 一个 [ButtonSide]。用 [Notifier]：既要在启动时从文件读进来，又要被
 /// 「我的」页的 GUI 开关**就地改掉并立即生效**（不用重启）。语义：
 /// - 初始状态是默认值（右侧），文件内容异步读入后覆盖；

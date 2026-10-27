@@ -179,7 +179,10 @@ class RecordRepository {
   /// （`undo_dao.g.dart` 里的 mixin 正常生成），只是不能进那个列表。
   ///
   /// 手动构造完全等价：DAO 是无状态的，只是给 db 套一层类型化的查询方法。
-  late final UndoDao _undo = UndoDao(_dao.db);
+  ///
+  /// **必须与记录 DAO 绑定同一个记录本**：撤销写回的是整行快照，
+  /// 历史与记录分属不同的本会把数据写到错误的记录本里去。
+  late final UndoDao _undo = UndoDao(_dao.db, bookId: _dao.bookId);
 
   /// 按一批 id 取整行（**存快照用**）。
   Future<List<RecordEntity>> getRecordsByIds(List<String> ids) =>
@@ -248,7 +251,7 @@ class RecordRepository {
     // 按「新 → 旧」遍历并覆盖写入 map，最后每个 id 留下的就是最旧那份。
     final byId = <String, RecordEntity>{};
     for (final entry in targets) {
-      for (final record in RecordSnapshot.decode(entry.snapshot)) {
+      for (final record in RecordSnapshot.decode(entry.snapshot, bookId: _dao.bookId)) {
         byId[record.id] = record;
       }
     }

@@ -23,6 +23,7 @@ final int _year = DateTime.now().year;
 RecordEntity _rec(int i, {List<String> tags = const <String>[]}) {
   final at = DateTime(_year, 3, (i % 27) + 1, 9);
   return RecordEntity(
+    bookId: 'default',
     id: 'id-$i',
     title: null,
     content: '第 $i 条',

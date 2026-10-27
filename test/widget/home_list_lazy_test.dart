@@ -17,6 +17,7 @@ import 'package:vestige/presentation/screens/home_screen.dart';
 import 'package:vestige/presentation/widgets/record_card.dart';
 
 RecordEntity _record(int i, DateTime day) => RecordEntity(
+      bookId: 'default',
       id: 'id-$i',
       content: '第 $i 条',
       tags: const <String>[],

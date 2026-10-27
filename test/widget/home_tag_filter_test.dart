@@ -26,6 +26,7 @@ RecordEntity _rec(
   List<String> tags = const <String>[],
 }) =>
     RecordEntity(
+      bookId: 'default',
       id: id,
       title: null,
       content: content,
@@ -50,18 +51,38 @@ List<RecordEntity> _seed() => <RecordEntity>[
       _rec('d', _today.subtract(const Duration(days: 1)), content: '没标签'),
     ];
 
-/// 打开标签弹层（点 AppBar 上那个入口按钮）。
+/// 打开标签弹层。
 ///
-/// 入口按钮的 tooltip 会随筛选状态变（未筛选 =「按标签筛选」，
-/// 筛选中 =「筛选：#xx」），所以这里不能钉死一个 tooltip —— 按前缀找。
+/// 入口 2026-10-27 起收进 AppBar 的 ⋮ 菜单（那颗按钮的文案会随筛选状态变：
+/// 未筛选 =「按标签筛选」，筛选中 =「筛选：#xx」），所以先展开菜单再点条目。
 Future<void> _openTagSheet(WidgetTester tester) async {
+  await tester.tap(find.byTooltip('更多'));
+  await tester.pumpAndSettle();
   await tester.tap(
     find.byWidgetPredicate(
       (w) =>
-          w is IconButton &&
-          (w.tooltip == '按标签筛选' || (w.tooltip?.startsWith('筛选：#') ?? false)),
+          w is Text &&
+          (w.data == '按标签筛选' || (w.data?.startsWith('筛选：') ?? false)),
     ),
   );
+  await tester.pumpAndSettle();
+}
+
+/// 断言菜单里「标签筛选」那一项的文案（打开菜单 → 断言 → 点遮罩关掉）。
+Future<void> _expectTagMenu(WidgetTester tester, String label) async {
+  await tester.tap(find.byTooltip('更多'));
+  await tester.pumpAndSettle();
+  expect(find.text(label), findsOneWidget);
+  await tester.tapAt(const Offset(10, 10));
+  await tester.pumpAndSettle();
+}
+
+/// 断言菜单里**没有**某一项（同上）。
+Future<void> _expectNoTagMenu(WidgetTester tester, String label) async {
+  await tester.tap(find.byTooltip('更多'));
+  await tester.pumpAndSettle();
+  expect(find.text(label), findsNothing);
+  await tester.tapAt(const Offset(10, 10));
   await tester.pumpAndSettle();
 }
 
@@ -276,10 +297,9 @@ void main() {
       expect(find.byType(FilterChip), findsNothing);
       // 也没进筛选状态：指示条与「清除筛选」都不该出现
       expect(find.text('清除筛选'), findsNothing);
-      // 入口按钮在，且是「未筛选」的描边态
-      expect(find.byTooltip('按标签筛选'), findsOneWidget);
-      expect(find.byTooltip('筛选：#咖啡'), findsNothing);
-      expect(find.byTooltip('筛选：#生活'), findsNothing);
+      // 入口在菜单里，且是「未筛选」的描边态
+      await _expectTagMenu(tester, '按标签筛选');
+      await _expectNoTagMenu(tester, '筛选：#咖啡');
 
       // 弹层没开的时候也不该有复选框 —— 复选只发生在弹层里
       expect(find.byType(Checkbox), findsNothing);
@@ -312,7 +332,7 @@ void main() {
       expect(find.byType(RecordCard), findsNWidgets(2));
       expect(find.text('只有咖啡'), findsOneWidget);
       expect(find.text('没标签'), findsNothing);
-      expect(find.byTooltip('筛选：#咖啡'), findsOneWidget);
+      await _expectTagMenu(tester, '筛选：#咖啡');
 
       // 再进弹层点同一个标签 = 取消勾选
       await _openTagSheet(tester);
@@ -321,7 +341,7 @@ void main() {
       await _dismissSheet(tester);
 
       expect(find.byType(RecordCard), findsNWidgets(4));
-      expect(find.byTooltip('筛选：#咖啡'), findsNothing);
+      await _expectNoTagMenu(tester, '筛选：#咖啡');
     });
 
     testWidgets('复选：勾第二个标签不挤掉第一个，两个复选框同时勾着', (tester) async {
@@ -347,7 +367,7 @@ void main() {
       // 并集：a(生活) b(生活+咖啡) c(咖啡) 三条，d 除外
       expect(find.byType(RecordCard), findsNWidgets(3));
       expect(find.text('没标签'), findsNothing);
-      expect(find.byTooltip('筛选：已选 2 个标签'), findsOneWidget);
+      await _expectTagMenu(tester, '筛选：已选 2 个标签');
     });
 
     testWidgets('指示条上每个标签都能单独去掉', (tester) async {
@@ -366,7 +386,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.byType(RecordCard), findsNWidgets(2), reason: '只剩「生活」的 2 条');
-      expect(find.byTooltip('筛选：#生活'), findsOneWidget);
+      await _expectTagMenu(tester, '筛选：#生活');
       expect(find.text('清除筛选'), findsOneWidget, reason: '还有一个标签在，指示条不该消失');
     });
 
@@ -407,7 +427,7 @@ void main() {
 
     testWidgets('没有任何标签时入口按钮不出现', (tester) async {
       await pumpHome(tester, <RecordEntity>[_rec('x', _today)]);
-      expect(find.byTooltip('按标签筛选'), findsNothing);
+      await _expectNoTagMenu(tester, '按标签筛选');
       expect(find.byType(FilterChip), findsNothing);
     });
 

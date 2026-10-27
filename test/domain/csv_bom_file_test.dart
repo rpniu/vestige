@@ -12,6 +12,7 @@ void main() {
   test('导出的 CSV 写成文件后带 UTF-8 BOM 字节', () async {
     final csv = CsvUtil.export(<RecordEntity>[
       RecordEntity(
+        bookId: 'default',
         id: 'a1',
         title: '中文标题',
         content: '中文内容',

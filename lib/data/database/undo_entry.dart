@@ -1,4 +1,6 @@
 import 'package:drift/drift.dart';
+import 'package:vestige/data/database/record_book_table.dart';
+import 'package:vestige/domain/record_book.dart';
 
 /// 可撤销操作的历史（保留最近若干步）。
 ///
@@ -9,6 +11,16 @@ import 'package:drift/drift.dart';
 /// 昨天清空了回收站，今天才发现。只在内存里的话，关掉 App 就再也救不回来了。
 @DataClassName('UndoEntryEntity')
 class UndoEntries extends Table {
+  /// 所属记录本，外键指向 [RecordBooks]（级联删除）。
+  ///
+  /// 撤销历史**必须按记录本隔离**：快照里是整行记录，跨本回滚会把这批记录
+  /// 写进另一本里去 —— 那是数据污染，比「没有撤销」糟糕得多。
+  ///
+  /// 默认值 `default` 同样来自 v7 迁移的回填（老库的历史全归默认本）。
+  TextColumn get bookId => text()
+      .withDefault(const Constant(kDefaultBookId))
+      .references(RecordBooks, #id, onDelete: KeyAction.cascade)();
+
   /// 自增主键。历史按写入顺序排，用 rowid 最省事，
   /// 也天然给出了「哪几步比某一步更新」的判据（回滚时要用）。
   IntColumn get id => integer().autoIncrement()();

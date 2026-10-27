@@ -61,6 +61,6 @@ void main() {
     addTearDown(db.close);
 
     final version = await db.customSelect('PRAGMA user_version').getSingle();
-    expect(version.data.values.first, 6);
+    expect(version.data.values.first, VestigeDatabase.currentSchemaVersion);
   });
 }

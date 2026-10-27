@@ -8,6 +8,7 @@ import 'package:vestige/presentation/screens/edit_screen.dart';
 import 'package:vestige/presentation/providers/home_scroll_provider.dart';
 import 'package:vestige/presentation/screens/home_screen.dart';
 import 'package:vestige/presentation/screens/profile_screen.dart';
+import 'package:vestige/presentation/screens/record_books_screen.dart';
 import 'package:vestige/presentation/screens/search_screen.dart';
 import 'package:vestige/presentation/screens/stats_screen.dart';
 import 'package:vestige/presentation/screens/trash_screen.dart';
@@ -26,6 +27,7 @@ abstract final class AppRoutes {
   static const String profile = '/profile';
   static const String trash = '/trash';
   static const String undoHistory = '/undo-history';
+  static const String recordBooks = '/books';
   static const String edit = '/edit';
   static const String search = '/search';
 
@@ -103,6 +105,12 @@ GoRouter createRouter() => GoRouter(
     GoRoute(
       path: AppRoutes.undoHistory,
       builder: (context, state) => const UndoHistoryScreen(),
+    ),
+    // 记录本：切换 / 新建 / 删除数据空间。整页推入（与回收站、操作历史一致）——
+    // 它会切换整个 App 的数据源，必须能在返回之前看清楚自己在哪一本上。
+    GoRoute(
+      path: AppRoutes.recordBooks,
+      builder: (context, state) => const RecordBooksScreen(),
     ),
     GoRoute(
       path: AppRoutes.search,

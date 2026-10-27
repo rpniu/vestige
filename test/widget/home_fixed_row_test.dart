@@ -34,6 +34,7 @@ RecordEntity _record(
 }) {
   final at = DateTime(day.year, day.month, day.day, 8, i % 60);
   return RecordEntity(
+    bookId: 'default',
     id: 'id-$i',
     title: title,
     content: content ?? '第 $i 条',

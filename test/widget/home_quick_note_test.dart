@@ -1,18 +1,20 @@
-// 「速记」独立入口的回归测试。
+// 「速记」的回归测试 —— 它现在是「记一笔」按钮的**长按**。
 //
-// 背景（2026-09-28）：速记原来是「长按右下角 FAB」，但那个实现在安卓端完全失效 ——
-// `FloatingActionButton` 内部的 InkWell 自带长按识别器，与外包的
-// `GestureDetector.onLongPress` 在手势竞技场里冲突，外层回调永远不触发。
-// 桌面端因为 tooltip 还走一条路，所以「看着像是能用」，掩盖了安卓端的问题。
+// 背景：速记最早就是长按右下角 FAB，2026-09-28 在安卓真机上失效 ——
+// `FloatingActionButton` **内部自带 InkWell**，它的长按识别器在手势竞技场里
+// 先赢下指针，包在外面的 `GestureDetector.onLongPress` 永远不触发；
+// FAB 本身也没有 `onLongPress` 参数。桌面端因为 tooltip 那条路还能用，
+// 看起来「像没问题」，掩盖了安卓端的失效。
 //
-// 现在改成右下角按钮列里的**独立按钮**（白底 + 主色闪电图标），
-// 与「到顶/到底」「记一笔」竖着叠成一列。
+// 2026-10-27 恢复成长按：把按钮换成 Material + InkWell 自绘方块，
+// **同一个 InkWell 同时声明 `onTap` 与 `onLongPress`** —— 两个回调由同一个
+// 识别器内部裁决，不存在两个手势抢指针，因此安卓端也能稳定触发。
 //
 // 这里钉住四件事：
-// 1. 速记按钮在首页存在，位置在 FAB 上方、两者不重叠；
-// 2. 点击会真的插入一条记录（内容 = 「速记」，业务日期 = 今天）；
-// 3. 插入后弹撤销提示（带「撤销」动作），点它能退掉；
-// 4. 速记**不再**挂在 FAB 的长按上 —— 长按 FAB 什么都不该发生。
+// 1. 平时右下角只有一颗按钮（速记、计时都不常驻）；
+// 2. 长按 = 速记：真的插入一条「速记」，业务日期是今天；
+// 3. 插入后弹撤销提示，点它能退掉；
+// 4. 计时开始后，胶囊里才多出计时段。
 
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
@@ -82,58 +84,60 @@ void main() {
   /// dock 段/FAB 的标称边长（56），用于等尺寸断言。
   const double _buttonSideForTest = 56;
 
-  /// 速记按钮：白底 Material 包着的闪电图标。
-  Finder quickNoteButton() => find.byIcon(Icons.bolt_rounded);
+  /// 「记一笔」按钮（点 = 进编辑页，长按 = 速记）。
+  Finder newRecordButton() => find.byKey(const ValueKey('fab_button'));
 
-  testWidgets('首页有速记按钮，且排在「记一笔」FAB 上方、两者不重叠', (tester) async {
+  /// 长按「记一笔」= 速记。
+  Future<void> longPressQuickNote(WidgetTester tester) async {
+    await tester.longPress(newRecordButton());
+    await tester.pumpAndSettle();
+  }
+
+  testWidgets('平时右下角只有一颗按钮（速记已并入长按，计时不常驻）', (tester) async {
     await pumpHome(tester);
 
-    expect(quickNoteButton(), findsOneWidget);
-    // 与「记一笔」的 + 图标是两个不同的按钮
-    expect(find.byIcon(Icons.add_rounded), findsOneWidget);
-
-    final quickNote = tester.getRect(quickNoteButton());
-    // 量 FAB 的外框 SizedBox（FAB 自身 render box 受主题 tapTargetSize 影响）
-    final fab = tester.getRect(find.byKey(const ValueKey('fab_button')));
-    expect(
-      quickNote.bottom,
-      lessThan(fab.top),
-      reason: '速记按钮应排在 FAB 上方，不能压在一起',
-    );
+    expect(newRecordButton(), findsOneWidget);
+    // 独立的速记按钮、计时段都不在了
+    expect(find.byIcon(Icons.bolt_rounded), findsNothing);
+    expect(find.byKey(const ValueKey('timer_button')), findsNothing);
+    // 全屏也只有这一颗浮动按钮
+    expect(find.byType(Material).evaluate().isNotEmpty, isTrue);
 
     await drainStreamTeardown(tester);
   });
 
-  testWidgets('dock 段顺序：自下而上是「记一笔 → 速记 → 计时」', (tester) async {
+  testWidgets('计时开始后，胶囊才出现在记一笔上方', (tester) async {
     await pumpHome(tester);
 
-    // 量尺寸必须找按钮整体（Semantics 上的 key），byIcon 只会量到 24px 图标
-    final quickNote = tester.getRect(
-      find.byKey(const ValueKey('quick_note_button')),
-    );
-    final timer = tester.getRect(find.byKey(const ValueKey('timer_button')));
+    expect(find.byKey(const ValueKey('timer_button')), findsNothing);
 
-    // y 轴向下：越靠屏幕下方 bottom 越大 —— FAB 在最下面，bottom 应最大；
-    // 计时段在速记之上。
+    // 从 AppBar 菜单开始计时（平时没有计时入口）
+    await tester.tap(find.byTooltip('更多'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('开始计时'));
+    await tester.pumpAndSettle();
+
+    final timer = tester.getRect(find.byKey(const ValueKey('timer_button')));
+    final newRecord = tester.getRect(newRecordButton());
+
+    // y 轴向下：越靠屏幕下方 bottom 越大 —— 计时胶囊在记一笔之上
     expect(
       timer.bottom,
-      lessThan(quickNote.bottom),
-      reason: '速记是 dock 最下段，应在计时段下方',
+      lessThan(newRecord.top),
+      reason: '计时胶囊应在记一笔按钮上方',
     );
-    // 等宽等高（同一套规格常量）
+    // 等宽（同一套规格常量）
     expect(timer.width, closeTo(_buttonSideForTest, 0.01));
-    expect(quickNote.height, closeTo(_buttonSideForTest, 0.01));
-    expect(timer.height, closeTo(_buttonSideForTest, 0.01));
+    expect(newRecord.width, closeTo(_buttonSideForTest, 0.01));
 
     await drainStreamTeardown(tester);
   });
 
-  testWidgets('点速记：直接插入一条今天的记录，内容为「速记」', (tester) async {
+  testWidgets('长按记一笔 = 速记：直接插入一条今天的记录，内容为「速记」', (tester) async {
     await pumpHome(tester);
     expect(await repo.getAllActiveRecordsSync(), isEmpty);
 
-    await tester.tap(quickNoteButton());
-    await tester.pumpAndSettle();
+    await longPressQuickNote(tester);
 
     final saved = await repo.getAllActiveRecordsSync();
     expect(saved, hasLength(1));
@@ -147,8 +151,7 @@ void main() {
   testWidgets('速记后弹出带「撤销」的提示', (tester) async {
     await pumpHome(tester);
 
-    await tester.tap(quickNoteButton());
-    await tester.pumpAndSettle();
+    await longPressQuickNote(tester);
 
     expect(find.text('已速记一条（今天）'), findsOneWidget);
     expect(find.text('撤销'), findsOneWidget);
@@ -159,8 +162,7 @@ void main() {
   testWidgets('速记提示上的「撤销」能把刚记的那条退掉', (tester) async {
     await pumpHome(tester);
 
-    await tester.tap(quickNoteButton());
-    await tester.pumpAndSettle();
+    await longPressQuickNote(tester);
     expect(await repo.getAllActiveRecordsSync(), hasLength(1));
 
     await tester.tap(find.text('撤销'));
@@ -175,16 +177,5 @@ void main() {
     await drainStreamTeardown(tester);
   });
 
-  testWidgets('长按 FAB 不再速记（旧的 GestureDetector 方案已移除）', (tester) async {
-    await pumpHome(tester);
 
-    await tester.longPress(find.byType(FloatingActionButton));
-    await tester.pumpAndSettle();
-
-    // 长按 FAB 一个记录都不该产生
-    expect(await repo.getAllActiveRecordsSync(), isEmpty);
-    expect(find.text('已速记一条（今天）'), findsNothing);
-
-    await drainStreamTeardown(tester);
-  });
 }

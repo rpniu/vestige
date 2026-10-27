@@ -26,6 +26,7 @@ final int _year = DateTime.now().year;
 RecordEntity _record(int i, int month, int day, {int backfillDelayDays = 0}) {
   final recordedAt = DateTime(_year, month, day, 9);
   return RecordEntity(
+    bookId: 'default',
     id: 'id-$i',
     content: '第 $i 条',
     tags: const <String>[],

@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:vestige/data/database/app_database.dart';
+import 'package:vestige/domain/record_book.dart';
 
 /// 记录快照的 JSON 编解码。
 ///
@@ -35,7 +36,10 @@ class RecordSnapshot {
   /// 解析快照；**解析不出来的部分会被丢掉**，不会抛。
   ///
   /// 返回空列表 = 这次撤销没有可写回的内容，调用方应当据此提示而不是静默成功。
-  static List<RecordEntity> decode(String source) {
+  static List<RecordEntity> decode(
+    String source, {
+    String bookId = kDefaultBookId,
+  }) {
     final Object? root;
     try {
       root = jsonDecode(source);
@@ -49,7 +53,7 @@ class RecordSnapshot {
     final out = <RecordEntity>[];
     for (final row in rows) {
       if (row is! Map) continue;
-      final record = _decodeOne(row);
+      final record = _decodeOne(row, bookId);
       if (record != null) out.add(record);
     }
     return out;
@@ -69,7 +73,7 @@ class RecordSnapshot {
       };
 
   /// 单条解析；缺关键字段或类型不对时返回 null（跳过这一条）。
-  static RecordEntity? _decodeOne(Map<Object?, Object?> row) {
+  static RecordEntity? _decodeOne(Map<Object?, Object?> row, String bookId) {
     final id = row['id'];
     final content = row['content'];
     final recordedAt = _time(row['recordedAt']);
@@ -95,6 +99,7 @@ class RecordSnapshot {
         ? (row['durationS'] == null ? rawDuration * 60 : rawDuration)
         : null;
     return RecordEntity(
+      bookId: bookId,
       id: id,
       title: title is String ? title : null,
       content: content,

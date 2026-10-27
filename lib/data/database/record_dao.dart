@@ -1,4 +1,5 @@
 import 'package:drift/drift.dart';
+import 'package:vestige/domain/record_book.dart';
 
 import 'app_database.dart';
 import 'record.dart';
@@ -17,27 +18,47 @@ const int kSearchResultLimit = 200;
 /// 与 v1 的差别：所有列表/排序一律按 **recordedAt**（业务日期）而非 createdAt，
 /// 这样补记进来的记录会落在它「属于」的那一天，而不是排到列表最前面。
 /// 所有响应式查询以 `watch` 前缀返回 Stream，等价原 Room 的 Flow。
+///
+/// ## 记录本隔离（v7）
+/// 每个实例绑定**一个记录本**（[bookId]），所有读写都带上 `book_id` 条件。
+/// 隔离靠这一处收口，而不是让每个调用方自己记得加过滤 ——
+/// 「某处忘了 where」正是单表方案最容易踩的坑，所以这里把条件写进
+/// `_inBook`，任何新方法只要拼上它就自动被隔离。
 @DriftAccessor(tables: [Records])
 class RecordDao extends DatabaseAccessor<VestigeDatabase>
     with _$RecordDaoMixin {
-  RecordDao(super.db);
+  RecordDao(super.db, {this.bookId = kDefaultBookId});
+
+  /// 本 DAO 负责的记录本。
+  final String bookId;
+
+  /// 记录本过滤条件 —— 所有查询/更新的公共前提。
+  Expression<bool> get _inBook => records.bookId.equals(bookId);
 
   /// 活跃记录（未软删），按业务日期倒序。响应式 Stream。
   Stream<List<RecordEntity>> watchAllActive() => _activeQuery().watch();
 
   /// 按 id 查单条（编辑页加载用）。
-  Future<RecordEntity?> getById(String id) =>
-      (select(records)..where((r) => r.id.equals(id))).getSingleOrNull();
+  ///
+  /// 仍然带上 `book_id`：id 是 uuid，理论上全局唯一，但「查得到别的本的记录」
+  /// 这件事本身就不该发生 —— 隔离条件不因「反正不会撞」而省。
+  Future<RecordEntity?> getById(String id) => (select(records)
+        ..where((r) => r.id.equals(id) & _inBook))
+      .getSingleOrNull();
 
   /// 按一批 id 查（批量改标签用 —— 每行要并上**自己已有的**标签，所以得先读出来）。
   Future<List<RecordEntity>> getByIds(List<String> ids) {
     if (ids.isEmpty) return Future<List<RecordEntity>>.value(const []);
-    return (select(records)..where((r) => r.id.isIn(ids))).get();
+    return (select(records)..where((r) => r.id.isIn(ids) & _inBook)).get();
   }
 
   /// 新增。调用方用 `RecordsCompanion.insert(...)`；id / 时间戳留空则由
   /// clientDefault 生成（recordedAt 默认今天此刻）。
-  Future<void> insert(RecordsCompanion entry) => into(records).insert(entry);
+  ///
+  /// `book_id` 由 DAO 强制写入，调用方传什么都不影响 —— 避免「复制一段插入
+  /// 代码忘了改 bookId」把记录写进另一本。
+  Future<void> insert(RecordsCompanion entry) =>
+      into(records).insert(entry.copyWith(bookId: Value(bookId)));
 
   /// 更新。entry 必须包含 id。
   /// 注意：方法名不能用 `update`，会与 drift 自带的 update() 构造器冲突。
@@ -46,19 +67,24 @@ class RecordDao extends DatabaseAccessor<VestigeDatabase>
       throw ArgumentError('replace 必须提供 id');
     }
     final id = entry.id.value;
-    return (update(records)..where((r) => r.id.equals(id))).write(entry);
+    return (update(records)
+          ..where((r) => r.id.equals(id) & _inBook))
+        .write(entry.copyWith(bookId: Value(bookId)));
   }
 
   /// 批量 upsert（CSV 导入用）：同 id 覆盖，新 id 插入。单事务执行。
   Future<int> upsertAll(List<RecordsCompanion> entries) async {
     if (entries.isEmpty) return 0;
-    await batch((b) => b.insertAllOnConflictUpdate(records, entries));
+    final scoped = <RecordsCompanion>[
+      for (final e in entries) e.copyWith(bookId: Value(bookId)),
+    ];
+    await batch((b) => b.insertAllOnConflictUpdate(records, scoped));
     return entries.length;
   }
 
   /// 软删除单条：打上 `deleted`，并**记下进回收站的时刻**（回收站保留期要用）。
   Future<void> softDelete(String id) =>
-      (update(records)..where((r) => r.id.equals(id))).write(
+      (update(records)..where((r) => r.id.equals(id) & _inBook)).write(
         RecordsCompanion(
           deleted: const Value(true),
           deletedAt: Value(DateTime.now()),
@@ -68,7 +94,7 @@ class RecordDao extends DatabaseAccessor<VestigeDatabase>
   /// 批量软删除。空列表直接返回：`IN ()` 是非法 SQL。
   Future<void> softDeleteMany(List<String> ids) {
     if (ids.isEmpty) return Future<void>.value();
-    return (update(records)..where((r) => r.id.isIn(ids))).write(
+    return (update(records)..where((r) => r.id.isIn(ids) & _inBook)).write(
       RecordsCompanion(
         deleted: const Value(true),
         deletedAt: Value(DateTime.now()),
@@ -107,7 +133,7 @@ class RecordDao extends DatabaseAccessor<VestigeDatabase>
       return Future<List<RecordEntity>>.value(const []);
     }
 
-    final conditions = <Expression<bool>>[records.deleted.equals(false)];
+    final conditions = <Expression<bool>>[_inBook, records.deleted.equals(false)];
     if (trimmed.isNotEmpty) {
       final pattern = '%${_escapeLike(trimmed)}%';
       conditions.add(
@@ -138,19 +164,18 @@ class RecordDao extends DatabaseAccessor<VestigeDatabase>
       .replaceAll('_', r'\_');
 
   /// 回收站记录（已软删），按最后修改时间倒序。响应式 Stream。
-  Stream<List<RecordEntity>> watchDeleted() =>
-      (select(records)
-            ..where((r) => r.deleted.equals(true))
-            ..orderBy([(r) => OrderingTerm.desc(r.updatedAt)]))
-          .watch();
+  Stream<List<RecordEntity>> watchDeleted() => (select(records)
+        ..where((r) => r.deleted.equals(true) & _inBook)
+        ..orderBy([(r) => OrderingTerm.desc(r.updatedAt)]))
+      .watch();
 
   /// 回收站记录的同步获取（**清空回收站前存快照用**）。
   Future<List<RecordEntity>> getDeletedSync() =>
-      (select(records)..where((r) => r.deleted.equals(true))).get();
+      (select(records)..where((r) => r.deleted.equals(true) & _inBook)).get();
 
   /// 恢复单条：清掉 `deleted`，也清掉 `deletedAt` —— 再删一次会**重新开始计时**。
   Future<void> restore(String id) =>
-      (update(records)..where((r) => r.id.equals(id))).write(
+      (update(records)..where((r) => r.id.equals(id) & _inBook)).write(
         const RecordsCompanion(
           deleted: Value(false),
           deletedAt: Value<DateTime?>(null),
@@ -160,7 +185,7 @@ class RecordDao extends DatabaseAccessor<VestigeDatabase>
   /// 批量恢复。空列表直接返回：`IN ()` 是非法 SQL。
   Future<void> restoreMany(List<String> ids) {
     if (ids.isEmpty) return Future<void>.value();
-    return (update(records)..where((r) => r.id.isIn(ids))).write(
+    return (update(records)..where((r) => r.id.isIn(ids) & _inBook)).write(
       const RecordsCompanion(
         deleted: Value(false),
         deletedAt: Value<DateTime?>(null),
@@ -170,17 +195,17 @@ class RecordDao extends DatabaseAccessor<VestigeDatabase>
 
   /// 彻底删除单条。
   Future<void> hardDelete(String id) =>
-      (delete(records)..where((r) => r.id.equals(id))).go();
+      (delete(records)..where((r) => r.id.equals(id) & _inBook)).go();
 
   /// 批量彻底删除。空列表直接返回：`IN ()` 是非法 SQL。
   Future<void> hardDeleteMany(List<String> ids) {
     if (ids.isEmpty) return Future<void>.value();
-    return (delete(records)..where((r) => r.id.isIn(ids))).go();
+    return (delete(records)..where((r) => r.id.isIn(ids) & _inBook)).go();
   }
 
   /// 清空回收站。
   Future<int> emptyTrash() =>
-      (delete(records)..where((r) => r.deleted.equals(true))).go();
+      (delete(records)..where((r) => r.deleted.equals(true) & _inBook)).go();
 
   /// 批量平移业务日期：[delta] 秒直接加到 `recorded_at` 上。
   ///
@@ -194,16 +219,20 @@ class RecordDao extends DatabaseAccessor<VestigeDatabase>
   ///
   /// 占位符按 id 个数展开。用途是手动多选（长按勾选），实际量级在几十条，
   /// 远低于 SQLite 的变量上限（3.32+ 为 32766）。
+  ///
+  /// `book_id` 条件必须留在 WHERE 里：裸 SQL 不经过 [_inBook]，
+  /// 漏掉它这条 UPDATE 就会跨记录本改数据。
   Future<int> shiftRecordedAt(List<String> ids, Duration delta) {
     if (ids.isEmpty) return Future<int>.value(0);
     final placeholders = List<String>.filled(ids.length, '?').join(', ');
     return customUpdate(
       'UPDATE records '
       'SET recorded_at = recorded_at + ?, updated_at = ? '
-      'WHERE id IN ($placeholders)',
+      'WHERE book_id = ? AND id IN ($placeholders)',
       variables: <Variable<Object>>[
         Variable<int>(delta.inSeconds),
         Variable<DateTime>(DateTime.now()),
+        Variable<String>(bookId),
         for (final id in ids) Variable<String>(id),
       ],
       // 声明影响的是哪张表，drift 才会通知依赖它的 stream 重新查询
@@ -229,7 +258,7 @@ class RecordDao extends DatabaseAccessor<VestigeDatabase>
             tags: Value(entry.value),
             updatedAt: Value(now),
           ),
-          where: (r) => r.id.equals(entry.key),
+          where: (r) => r.id.equals(entry.key) & _inBook,
         );
       }
     });
@@ -268,18 +297,21 @@ class RecordDao extends DatabaseAccessor<VestigeDatabase>
         durationS: Value(r.durationS),
       );
 
-      final affected =
-          await (update(records)..where((t) => t.id.equals(r.id))).write(fields);
+      final affected = await (update(records)
+            ..where((t) => t.id.equals(r.id) & _inBook))
+          .write(fields);
       if (affected == 0) {
-        await into(records).insert(fields.copyWith(id: Value(r.id)));
+        await into(records).insert(
+          fields.copyWith(id: Value(r.id), bookId: Value(bookId)),
+        );
       }
     }
   }
 
-  /// 活跃记录的基础查询：过滤软删 + 按业务日期倒序。
+  /// 活跃记录的基础查询：过滤软删与本记录本 + 按业务日期倒序。
   SimpleSelectStatement<$RecordsTable, RecordEntity> _activeQuery() =>
       select(records)
-        ..where((r) => r.deleted.equals(false))
+        ..where((r) => r.deleted.equals(false) & _inBook)
         ..orderBy([
           (r) => OrderingTerm.desc(r.recordedAt),
           // 同一天内：补记的先按入库顺序排，读起来符合「补交」直觉

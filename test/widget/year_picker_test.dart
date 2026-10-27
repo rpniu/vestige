@@ -19,6 +19,7 @@ import 'package:vestige/presentation/screens/stats_screen.dart';
 final int _year = DateTime.now().year;
 
 RecordEntity _record(int i, DateTime at) => RecordEntity(
+      bookId: 'default',
       id: 'id-$i',
       content: '第 $i 条',
       tags: const <String>[],

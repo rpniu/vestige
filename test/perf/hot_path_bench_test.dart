@@ -46,6 +46,7 @@ List<RecordEntity> _genRecords(int n) {
       recordedAt.minute,
     );
     return RecordEntity(
+      bookId: 'default',
       id: 'id-$i',
       content: '记一笔 $i',
       tags: const <String>[],

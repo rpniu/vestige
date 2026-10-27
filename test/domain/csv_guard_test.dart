@@ -18,6 +18,7 @@ void main() {
   }) {
     final at = DateTime(2026, 10, 1, 9, 30);
     return RecordEntity(
+      bookId: 'default',
       id: id,
       title: title,
       content: content,

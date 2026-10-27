@@ -10,12 +10,15 @@ import 'package:vestige/app/router.dart';
 import 'package:vestige/app/theme.dart';
 import 'package:vestige/domain/day_util.dart';
 import 'package:vestige/domain/duration_format.dart';
+import 'package:vestige/domain/record_book.dart';
 import 'package:vestige/domain/record_selection.dart';
 import 'package:vestige/data/config/home_layout_config.dart';
 import 'package:vestige/presentation/providers/duration_timer_provider.dart';
 import 'package:vestige/presentation/providers/home_layout_provider.dart';
+import 'package:vestige/presentation/providers/record_book_provider.dart';
 import 'package:vestige/presentation/providers/records_provider.dart';
 import 'package:vestige/presentation/widgets/batch_tag_sheet.dart';
+import 'package:vestige/presentation/widgets/book_switch_sheet.dart';
 import 'package:vestige/presentation/widgets/entrance.dart';
 import 'package:vestige/presentation/widgets/error_state.dart';
 import 'package:vestige/presentation/widgets/center_dialog.dart';
@@ -31,7 +34,7 @@ import 'package:vestige/presentation/providers/home_scroll_provider.dart';
 ///
 /// 另有两个浮层按钮（与「记一笔」竖着叠成一列，整列停靠边可由
 /// `<数据目录>/config/home_buttons.json` 配置，见 [ButtonSide]）：
-/// - 「速记」：不进编辑页，直接记一条内容为「速记」的今日记录（见 [_QuickNoteButton]）；
+/// - 「速记」：**长按**「记一笔」直接记一条内容为「速记」的今日记录（见 [_NewRecordButton]）；
 /// - 「到顶 / 到底」：列表滑动时浮现，方向跟着用户的滑动方向走（见 [ScrollJumpButton]）。
 class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
@@ -138,6 +141,14 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         : activeTags.length == 1
         ? '筛选：#${activeTags.first}'
         : '筛选：已选 ${activeTags.length} 个标签';
+
+    // 当前记录本。「只有一本」时首页完全不提它 —— 一条常驻信息不该
+    // 为用不到这个功能的人占高度；切到别的记录本之后才挂标识条。
+    final bookId = ref.watch(activeBookIdProvider);
+    final bookName = ref.watch(activeBookNameProvider);
+    // 计时段只在计时进行中出现（平时右下角只有一颗「记一笔」）。
+    // 计时是「一件还没收尾的事」，进行中必须可见 —— 否则用户找不到停止入口。
+    final timerRunning = ref.watch(durationTimerProvider) != null;
 
     // 底部导航「主页」图标被再次点击 → 回到顶部 + 重订阅数据流（刷新）。
     // 计数 provider 由 router 的 _ShellScaffold 递增，这里消费。
@@ -250,39 +261,25 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 ),
               ]
             : <Widget>[
-                // 标签筛选的入口。标签**不铺在主页上**（原来那排 chip 占了 48px
-                // 常驻高度，而且标签一多就得横滑着找），改为点开一个模态弹层慢慢挑。
-                // 有筛选生效时按钮换成实心的标签图标 + 主色，不进弹层也知道现在被筛着。
-                if (tagCounts.isNotEmpty)
-                  IconButton(
-                    icon: Icon(
-                      isFiltering ? Icons.sell_rounded : Icons.sell_outlined,
-                    ),
-                    color: isFiltering
-                        ? Theme.of(context).colorScheme.primary
-                        : null,
-                    tooltip: filterLabel,
-                    onPressed: _openTagSheet,
-                  ),
-                IconButton(
-                  icon: const Icon(Icons.search_rounded),
-                  tooltip: '搜索',
-                  onPressed: () => context.push(AppRoutes.search),
-                ),
-                IconButton(
-                  icon: const Icon(Icons.delete_sweep_rounded),
-                  tooltip: '回收站',
-                  onPressed: () => context.push(AppRoutes.trash),
+                // 右侧只剩这一个按钮（2026-10-27 用户要求）：点开是一个
+                // 带图标 + 文字的菜单，收录「记一笔 / 切换记录本 / 标签筛选 / 搜索」。
+                //
+                // 为什么图标用 ⋮ 而不是 +：菜单里是四个不同性质的动作，
+                // 画成 + 会被读成「点了就直接新建一条」，那是错的预期。
+                _AppBarMenu(
+                  showTagFilter: tagCounts.isNotEmpty,
+                  tagFilterLabel: filterLabel,
+                  isFiltering: isFiltering,
+                  onStartTimer: _startTimerFromMenu,
+                  onSwitchBook: _openBookSwitcher,
+                  onTagFilter: _openTagSheet,
+                  onSearch: () => context.push(AppRoutes.search),
                 ),
               ],
       ),
-      floatingActionButton: _selectionMode ? null : const _NewRecordFab(),
-      // 左右停靠由配置决定（「我的」页可改，持久化在
-      // <数据目录>/config/home_buttons.json，见 [ButtonSide]）。
-      floatingActionButtonLocation:
-          ref.watch(homeButtonLayoutProvider) == ButtonSide.left
-          ? FloatingActionButtonLocation.startFloat
-          : FloatingActionButtonLocation.endFloat,
+      // 不用 Scaffold 的 floatingActionButton 槽位：那颗按钮已经不是 FAB
+      // （为了支持长按，见 [_NewRecordButton]），放在 Stack 里与 dock 用
+      // 同一套「停靠边 + 底部偏移」定位，两者永远对齐。
       body: Stack(
         children: <Widget>[
           RefreshIndicator(
@@ -293,7 +290,15 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
             child: CustomScrollView(
               controller: _scrollController,
               slivers: <Widget>[
-                // 筛选生效时才出现的一行细指示条：告诉用户「你现在看的不是全部」，
+                // 记录本标识：切到非默认记录本后必须一眼看出「现在记的是哪一本」，
+                // 否则「我之前的记录呢」是切换后最容易发生的误会。
+                if (!isDefaultBook(bookId))
+                  SliverToBoxAdapter(
+                    child: _ActiveBookBanner(
+                      name: bookName,
+                      onTap: () => context.push(AppRoutes.recordBooks),
+                    ),
+                  ),                // 筛选生效时才出现的一行细指示条：告诉用户「你现在看的不是全部」，
                 // 并给一个一键清除的落点。没筛选时它整条不存在 ——
                 // 常驻一排标签 chip 的时代结束了（见 AppBar 的 _openTagSheet）。
                 if (isFiltering)
@@ -405,21 +410,29 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                       };
                     },
                   ),
-                  // 给右下角 FAB / 滑动按钮留出空间
-                  const SliverToBoxAdapter(child: SizedBox(height: 96)),
+                  // 给右下角按钮簇留出空间：FAB(56) + 间隙(16) + dock(56~113)
+                  // + 底部边距(16)。取最高那一档，避免计时中最后一条被挡住。
+                  const SliverToBoxAdapter(child: SizedBox(height: 200)),
                 ],
               ],
             ),
           ),
-          // 快捷胶囊 dock（2026-10-22 用户定稿）：速记 / 计时 收在一枚
-          // 竖向胶囊里，悬在 FAB 正上方 —— 两段共用一个容器、一层投影。
-          // 多选态下速记段整体收起（dock 变矮），计时段保留 ——
-          // 它代表一件还没收尾的事，收起会让用户忘了停。
-          _floatPositioned(
-            side: side,
-            bottom: _dockBottom,
-            child: _QuickDock(showQuickNote: !_selectionMode),
-          ),
+          // 「记一笔」：点 = 进编辑页，长按 = 速记（2026-10-27）。
+          // 多选态收起 —— 那时屏幕属于批量操作。
+          if (!_selectionMode)
+            _floatPositioned(
+              side: side,
+              bottom: _fabBottom,
+              child: const _NewRecordButton(),
+            ),
+          // 计时胶囊：**只在计时进行中**出现（悬在记一笔正上方）。
+          // 平时右下角只有一颗按钮；计时开始后多出这一段，停止 / 放弃都在这里。
+          if (timerRunning)
+            _floatPositioned(
+              side: side,
+              bottom: _dockBottom,
+              child: const _QuickDock(),
+            ),
           // 「到底」：屏幕下缘居中的临时按钮，滑动列表时淡入、停手收起
           // （见 [_ToBottomButton]）。「到顶」不在按钮上 —— 主页图标再点即回顶。
           Positioned(
@@ -454,6 +467,40 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   ///
   /// [tagSheetOpenProvider] 是给 AppBar 那个入口按钮看的（弹层开着时按钮变实心），
   /// 两者不在同一层 widget 树里，只能走 provider。
+  /// 从菜单开始计时。
+  ///
+  /// 计时段平时不占位置（见 [_QuickDock.showTimer]），所以「开始」这一步
+  /// 放在菜单里；一旦开始，右下角会多出计时段，停止 / 放弃都在那里。
+  Future<void> _startTimerFromMenu() async {
+    final notifier = ref.read(durationTimerProvider.notifier);
+    if (ref.read(durationTimerProvider) != null) return;
+    await notifier.start();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        const SnackBar(
+          content: Text('计时开始，做完在右下角点计时按钮结束'),
+          duration: Duration(seconds: 3),
+          persist: false,
+        ),
+      );
+  }
+
+  /// 打开「切换记录本」弹层。
+  ///
+  /// 用居中弹层而不是跳 `/books`：切换是高频小动作，整页要多两步
+  /// （进页、返回）；弹层一眼看完点一下就走。管理仍在整页里，弹层给入口。
+  Future<void> _openBookSwitcher() async {
+    await showVestigeCenterDialog<void>(
+      context: context,
+      builder: (BuildContext context) => BookSwitchSheet(
+        // 先关弹层再跳页（弹层自己 pop，这里只负责导航）
+        onManage: () => context.push(AppRoutes.recordBooks),
+      ),
+    );
+  }
+
   Future<void> _openTagSheet() async {
     ref.read(tagSheetOpenProvider.notifier).state = true;
     await showVestigeCenterDialog<void>(
@@ -654,38 +701,148 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   }
 }
 
+/// AppBar 右上角那个「展开」按钮里的动作。
+enum _MenuAction { startTimer, switchBook, tagFilter, search }
+
+/// 右上角的单个展开按钮：点开是「图标 + 文字」的菜单。
+///
+/// 菜单里收的都是**低频**动作：开始计时 / 切换记录本 / 标签筛选 / 搜索。
+///
+/// 「记一笔」**不在这里**（2026-10-27 二版）：它是这个 App 的主操作，
+/// 藏进「更多」等于让首页没有可见的写入口 —— 它回到了右下角的 FAB，
+/// 一键进入编辑页。AppBar 因此只有一个 ⋮，两行标题拿到全部宽度。
+///
+/// 用 [PopupMenuButton] 而不是自绘弹层：它在点遮罩关闭、返回键关闭、
+/// 键盘导航、无障碍朗读上都是现成的，自绘这些要写四遍还没它稳。
+class _AppBarMenu extends StatelessWidget {
+  const _AppBarMenu({
+    required this.showTagFilter,
+    required this.tagFilterLabel,
+    required this.isFiltering,
+    required this.onStartTimer,
+    required this.onSwitchBook,
+    required this.onTagFilter,
+    required this.onSearch,
+  });
+
+  /// 有没有标签 —— 一个标签都没有时「标签筛选」这一项不出现。
+  final bool showTagFilter;
+
+  /// 菜单里那一项的文案（有筛选生效时直接说明筛的是什么）。
+  final String tagFilterLabel;
+  final bool isFiltering;
+
+  final VoidCallback onStartTimer;
+  final VoidCallback onSwitchBook;
+  final VoidCallback onTagFilter;
+  final VoidCallback onSearch;
+
+  @override
+  Widget build(BuildContext context) {
+    final surfaces = VestigeSurfaces.of(context);
+    return PopupMenuButton<_MenuAction>(
+      tooltip: '更多',
+      icon: const Icon(Icons.more_vert_rounded),
+      // 与页面同族的实色底（默认的 surfaceContainer 在这套主题里偏灰）
+      color: surfaces.card,
+      onSelected: (_MenuAction action) {
+        switch (action) {
+          case _MenuAction.startTimer:
+            onStartTimer();
+          case _MenuAction.switchBook:
+            onSwitchBook();
+          case _MenuAction.tagFilter:
+            onTagFilter();
+          case _MenuAction.search:
+            onSearch();
+        }
+      },
+      itemBuilder: (BuildContext context) => <PopupMenuEntry<_MenuAction>>[
+        _item(
+          context,
+          _MenuAction.startTimer,
+          Icons.timer_outlined,
+          '开始计时',
+        ),
+        _item(
+          context,
+          _MenuAction.switchBook,
+          Icons.auto_stories_rounded,
+          '切换记录本',
+        ),
+        if (showTagFilter)
+          _item(
+            context,
+            _MenuAction.tagFilter,
+            isFiltering ? Icons.sell_rounded : Icons.sell_outlined,
+            isFiltering ? tagFilterLabel : '按标签筛选',
+            highlighted: isFiltering,
+          ),
+        _item(
+          context,
+          _MenuAction.search,
+          Icons.search_rounded,
+          '搜索',
+        ),
+      ],
+    );
+  }
+
+  PopupMenuItem<_MenuAction> _item(
+    BuildContext context,
+    _MenuAction action,
+    IconData icon,
+    String label, {
+    bool highlighted = false,
+  }) {
+    final scheme = Theme.of(context).colorScheme;
+    return PopupMenuItem<_MenuAction>(
+      value: action,
+      child: Row(
+        children: <Widget>[
+          Icon(icon, size: 20, color: highlighted ? scheme.primary : null),
+          const SizedBox(width: 12),
+          Text(
+            label,
+            style: TextStyle(
+              fontWeight: highlighted ? FontWeight.w700 : FontWeight.w600,
+              color: highlighted ? scheme.primary : null,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 /// 右下角按钮列的统一规格。
 ///
-/// 三颗按钮（[ScrollJumpButton] / [_QuickNoteButton] / [_NewRecordFab]）
-/// 在右下角竖着叠成一列，**尺寸与圆角逐像素一致**才看起来是一组，
-/// 所以边长和圆角在这里定义一次，[ScrollJumpButton] 用 `side` 参数取同一个值。
+/// 两颗按钮（[_QuickDock] 与 [ScrollJumpButton]）在右下角竖着叠成一列，
+/// **尺寸与圆角逐像素一致**才看起来是一组，所以边长和圆角在这里定义一次，
+/// [ScrollJumpButton] 用 `side` 参数取同一个值。
 ///
-/// 三者语义上分两层：
-/// - 主色底 = 主操作（[_NewRecordFab] 进编辑页写一条）；
-/// - 卡片白底 = 辅助操作（[_QuickDock]：速记 / 计时 / 到顶到底）。
+/// 「记一笔」FAB 已于 2026-10-27 移除（并入 AppBar 的展开菜单），
+/// 右下角只有「记一笔」（长按 = 速记）与计时胶囊 / 到底按钮。
 const double _buttonSide = 56;
 
-/// 圆角 18 —— 与 [ScrollJumpButton] 的 `_shapeFor(56)` 是同一个值。
-const BorderRadius _buttonShape = BorderRadius.all(Radius.circular(18));
-
-/// 相邻两颗按钮之间的垂直间隙。
-const double _buttonGap = 16;
-
-/// 浮动操作的落位（距底部像素）。自下而上分两层：
-/// **记一笔（FAB）→ 快捷胶囊（速记 / 计时）**。
+/// 浮动操作的落位（距底部像素）。
 ///
-/// FAB 默认边距 16；胶囊 dock 悬在 FAB 正上方（+ 边长 + 间隙）。
-/// dock 内自上而下是 计时 / 速记 —— 速记贴着 FAB，是「写一条」的快捷路径。
+/// 自下而上：**记一笔按钮 → 计时胶囊**（胶囊只在计时进行中出现）。
+/// dock 悬在 FAB 正上方（+ 边长 + 间隙），与 FAB 等宽对齐。
 /// 「到底」按钮独立：屏幕下缘居中、滑动时才出现（见 [_ToBottomButton]）。
+///
+/// 2026-10-27 的第二版布局：记一笔回到右下角（它是这个 App 的主操作，
+/// 不该藏在 AppBar 的「更多」里）；为了让**平时只有两颗按钮**，
+/// 计时段改成「计时进行中才出现」—— 详见 [_QuickDock.showTimer]。
 const double _fabBottom = 16;
+const double _buttonGap = 16;
 const double _dockBottom = _fabBottom + _buttonSide + _buttonGap; // 88
 const double _toBottomBottom = 24;
 
-/// dock 内每段的固定高（56）与分隔线粗细（1）。
-/// 高度用固定值而不是 Expanded：dock 总高 = 段数×56 + (段数-1)×1，
-/// 每段正好与 FAB 等大，几何关系可以被测试精确断言。
+/// dock 内每段的固定高（56）。
+/// 用固定值而不是 Expanded：每段正好与「记一笔」按钮等大，几何关系可被测试精确断言。
+/// （分隔线那一档随「速记」并入长按一起删掉了 —— 胶囊里现在只剩一段。）
 const double _dockSegmentHeight = 56;
-const double _dockDividerHeight = 1;
 
 /// 按「停靠边 + 底部偏移」摆一颗浮动按钮。
 ///
@@ -704,30 +861,73 @@ Positioned _floatPositioned({
   );
 }
 
-/// 快捷胶囊 dock：计时 / 速记 两段收在一枚竖向胶囊里。
+/// 首页唯一的「记一笔」按钮：进编辑页写一条。
 ///
-/// 2026-10-22 定稿形态：两段共用一个容器、一层投影，与独立主色的 FAB
-/// 形成「一主一辅」的层次；宽度锁 56 与 FAB 等宽对齐，计时 MM:SS 用
-/// FittedBox 等比缩小，绝不撑宽 dock。每段高 56 + 1px 分隔线，几何可测。
-/// 「到底」不在此 dock（屏幕下缘居中，见 [_ToBottomButton]）；
-/// 「到顶」由主页图标再点承担（回顶 + 刷新）。
-class _QuickDock extends StatelessWidget {
-  const _QuickDock({required this.showQuickNote});
+/// 交互（2026-10-27 定稿）：
+/// - **点**：进编辑页写一条（写正文、挑日期、打标签、填时长都在那里）；
+/// - **长按**：速记 —— 不进编辑页，直接记一条「速记」到今天。
+///
+/// ## 为什么这次长按能成（上次失败的原因）
+/// 2026-09-28 那版把 `GestureDetector.onLongPress` 包在 **`FloatingActionButton`**
+/// 外面，安卓端 100% 失效：FAB **内部自带一个 InkWell**，它的长按识别器先在
+/// 手势竞技场里赢下指针，外层的回调永远不触发（`FloatingActionButton` 也没有
+/// `onLongPress` 参数）。桌面端因为 tooltip 还走一条路，看着「像能用」，掩盖了问题。
+///
+/// 现在不用 FAB，改成一个 Material + InkWell 的方块：**同一个 InkWell 同时
+/// 声明 `onTap` 与 `onLongPress`**，两者由同一个识别器内部裁决（短按 → onTap，
+/// 按住超过阈值 → onLongPress），不存在两个手势竞争的问题。外观仍是
+/// 56×56 主色方块、圆角 18、投影 3.5，与原来的 FAB 视觉一致。
+class _NewRecordButton extends ConsumerWidget {
+  const _NewRecordButton();
 
-  final bool showQuickNote;
+  static const BorderRadius _shape = BorderRadius.all(Radius.circular(18));
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final scheme = Theme.of(context).colorScheme;
+
+    return SizedBox(
+      // key 供测试量按钮整体框（也用来长按 / 点击）。
+      key: const ValueKey('fab_button'),
+      width: _buttonSide,
+      height: _buttonSide,
+      child: Material(
+        color: scheme.primary,
+        elevation: 3.5,
+        shape: RoundedRectangleBorder(borderRadius: _shape),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: () => context.push(AppRoutes.editNew()),
+          onLongPress: () {
+            // 长按是「看不见的动作」，先给一次触觉反馈再落库
+            HapticFeedback.mediumImpact();
+            quickAddRecord(context, ref);
+          },
+          child: Center(
+            child: Icon(
+              Icons.add_rounded,
+              size: 24,
+              color: scheme.onPrimary,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 计时胶囊：唯一一段「计时」，悬在记一笔按钮正上方。
+///
+/// 2026-10-27：速记并进「记一笔」的长按之后，这颗胶囊里只剩计时段，
+/// 且**只在计时进行中出现** —— 平时右下角就是一颗按钮。
+/// 保留胶囊这个容器（白底 + 投影 + 28 圆角）是为了让计时中的「MM:SS」
+/// 与下方的记一笔按钮同宽同族，看起来仍是一组。
+class _QuickDock extends StatelessWidget {
+  const _QuickDock();
 
   @override
   Widget build(BuildContext context) {
     final surfaces = VestigeSurfaces.of(context);
-    final divider = Container(
-      height: _dockDividerHeight,
-      color: surfaces.border,
-    );
-
-    // 自上而下：计时 / 速记（速记贴着下面的 FAB）。
-    final segmentCount = showQuickNote ? 2 : 1;
-    final dividerCount = segmentCount - 1;
-
     return Material(
       color: surfaces.card,
       elevation: 3,
@@ -735,55 +935,8 @@ class _QuickDock extends StatelessWidget {
       clipBehavior: Clip.antiAlias,
       child: SizedBox(
         width: _buttonSide,
-        height:
-            segmentCount * _dockSegmentHeight +
-            dividerCount * _dockDividerHeight,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: <Widget>[
-            const _TimerButton(),
-            if (showQuickNote) ...<Widget>[divider, const _QuickNoteButton()],
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// 首页唯一的「记一笔」按钮：进编辑页写一条。
-///
-/// 「补记」不单独占入口 —— 新建和补记是同一件事，只是业务日期不同，
-/// 进编辑页后在「今天 / 补交」里选。
-///
-/// **不支持长按速记**（2026-09-28 移除）：`FloatingActionButton` 内部的
-/// InkWell 自带长按识别器，会把外层 GestureDetector 的长按挤掉（安卓端 100% 失效）。
-/// 速记因此是并列的独立入口（[_QuickNoteButton]），在本按钮右边。
-///
-/// 形状是 56×56 正方形（圆角 18），与速记/计时三颗等大对齐；
-/// 用普通 FAB 而不是 extended（胶囊宽随内容），只留「+」图标。
-class _NewRecordFab extends ConsumerWidget {
-  const _NewRecordFab();
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final scheme = Theme.of(context).colorScheme;
-
-    return SizedBox(
-      // key 供测试量按钮整体框（FloatingActionButton 自身的 render box
-      // 会受主题 tapTargetSize 影响，量它测不准外框）。
-      key: const ValueKey('fab_button'),
-      width: _buttonSide,
-      height: _buttonSide,
-      child: FloatingActionButton(
-        heroTag: 'fab-record',
-        backgroundColor: scheme.primary,
-        foregroundColor: scheme.onPrimary,
-        elevation: 3.5,
-        highlightElevation: 6,
-        shape: const RoundedRectangleBorder(borderRadius: _buttonShape),
-        tooltip: '记一笔',
-        onPressed: () => context.push(AppRoutes.editNew()),
-        child: const Icon(Icons.add_rounded, size: 24),
+        height: _dockSegmentHeight,
+        child: const _TimerButton(),
       ),
     );
   }
@@ -923,98 +1076,58 @@ class _ToBottomButtonState extends State<_ToBottomButton> {
   }
 }
 
-/// 「速记」段：不进编辑页，直接记一条内容为 [quickNoteContent] 的今日记录。
+/// 速记：不进编辑页，直接记一条内容为 [quickNoteContent] 的今日记录。
 ///
-/// 为什么是独立入口而不是 FAB 的长按（2026-09-28）：
-/// 长按方案在安卓端完全失效 —— `FloatingActionButton` 内部的 InkWell 自带长按识别器，
-/// 与外包的 `GestureDetector.onLongPress` 在手势竞技场里冲突，外层回调不会触发。
-/// `FloatingActionButton` 本身没有 `onLongPress` 参数，所以改成并列的独立入口。
+/// 入口是「记一笔」按钮的**长按**（见 [_NewRecordButton]）。之前它是一颗
+/// 独立的白底闪电按钮，2026-10-27 并入长按，右下角因此只剩一颗按钮。
 ///
-/// 2026-10-22 定稿：它是 [_QuickDock] 的最下段（贴着 FAB），
-/// 容器（白底胶囊、投影、圆角）由 dock 统一提供，这里只负责交互与内容。
-class _QuickNoteButton extends ConsumerWidget {
-  const _QuickNoteButton();
+/// 抽成顶层函数而不是塞在某个 widget 里：它现在属于「记一笔按钮」的一个手势，
+/// 不再是独立组件，也就没有理由再挂一个 StatefulWidget 只为放它。
+const String quickNoteContent = '速记';
 
-  /// 速记写入的正文。
-  ///
-  /// 不用 `quickAddToday` 的缺省 `1`（那是原 App「敲一下就是一次」的计数语义），
-  /// 这里显式传值，语义是「先占个位、回头再补内容」。
-  static const String quickNoteContent = '速记';
+/// 直接记一条今天的记录，并给一次撤销机会。
+Future<void> quickAddRecord(BuildContext context, WidgetRef ref) async {
+  // 记住**这一条**的 id（2026-10-27 审查 C-003）：原先是撤销时反查
+  // 「业务日期=今天 且 createdAt 最大」的那条，插入还没回流、或当天另存过记录时
+  // 会删掉别的记录。id 是插入前就确定的，撤销因此不再需要推断。
+  final id = await ref
+      .read(recordActionsProvider)
+      .quickAddToday(content: quickNoteContent);
+  if (!context.mounted) return;
 
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final scheme = Theme.of(context).colorScheme;
-
-    return Semantics(
-      button: true,
-      label: '速记：直接记一条今天的',
-      // key 供测试量按钮整体框（按图标找只会量到 24px 的图标本身）。
-      key: const ValueKey('quick_note_button'),
-      child: SizedBox(
-        height: _dockSegmentHeight,
-        child: InkWell(
-          onTap: () => _quickAdd(context, ref),
-          child: Center(
-            child: Icon(Icons.bolt_rounded, size: 24, color: scheme.primary),
-          ),
+  ScaffoldMessenger.of(context)
+    ..hideCurrentSnackBar()
+    ..showSnackBar(
+      SnackBar(
+        // 撤销类提示统一带主色撤销图标（与 _toastUndoable 同一套分级）。
+        content: Row(
+          children: <Widget>[
+            Icon(
+              Icons.undo_rounded,
+              size: 18,
+              color: Theme.of(context).colorScheme.primary,
+            ),
+            const SizedBox(width: 10),
+            const Expanded(child: Text('已速记一条（今天）')),
+          ],
+        ),
+        // 与 _toastUndoable 同一档：带撤销按钮的提示都要
+        // ① 显式 persist: false（否则永不消失）② 时长 3 秒。
+        duration: const Duration(seconds: 3),
+        persist: false,
+        action: SnackBarAction(
+          label: '撤销',
+          onPressed: () => _undoQuickAdd(ref, id),
         ),
       ),
     );
-  }
-
-  /// 直接记一条今天的记录，并给一次撤销机会。
-  Future<void> _quickAdd(BuildContext context, WidgetRef ref) async {
-    // 记住**这一条**的 id（2026-10-27 审查 C-003）：原先是撤销时反查
-    // 「业务日期=今天 且 createdAt 最大」的那条，插入还没回流、或当天另存过记录时
-    // 会删掉别的记录。id 是插入前就确定的，撤销因此不再需要推断。
-    final id = await ref
-        .read(recordActionsProvider)
-        .quickAddToday(content: quickNoteContent);
-    if (!context.mounted) return;
-
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(
-          // 撤销类提示统一带主色撤销图标（与 _toastUndoable 同一套分级）。
-          content: Row(
-            children: <Widget>[
-              Icon(
-                Icons.undo_rounded,
-                size: 18,
-                color: Theme.of(context).colorScheme.primary,
-              ),
-              const SizedBox(width: 10),
-              const Expanded(child: Text('已速记一条（今天）')),
-            ],
-          ),
-          // 与 _toastUndoable 同一档：带撤销按钮的提示都要
-          // ① 显式 persist: false（否则永不消失）② 时长 3 秒。
-          duration: const Duration(seconds: 3),
-          persist: false,
-          action: SnackBarAction(
-            label: '撤销',
-            onPressed: () => _undoQuickAdd(ref, id),
-          ),
-        ),
-      );
-  }
-
-  /// 撤销刚插入的那一条（按 id 精确软删）。
-  Future<void> _undoQuickAdd(WidgetRef ref, String id) async {
-    await ref.read(recordActionsProvider).deleteRecord(id);
-  }
 }
 
-/// 「计时」按钮：开始/结束一次计时，结束时带着时长进编辑页。
-///
-/// - 未计时：显示表盘图标，点击开始；
-/// - 计时中：显示 `MM:SS` 钟面（每秒走一格），点击弹「停止并记录 / 放弃」；
-///   停止并记录 → 结算分钟数（向上取整）→ 跳编辑页预填时长。
-///
-/// 钟面的秒级刷新用本地 1s Timer 而不是全局 ticker：只有这一颗按钮在动，
-/// 不拖累整页重建。计时开始时刻持久化在 SharedPreferences（见
-/// [DurationTimerNotifier]），杀进程重开计时照走。
+/// 撤销刚插入的那一条（按 id 精确软删）。
+Future<void> _undoQuickAdd(WidgetRef ref, String id) async {
+  await ref.read(recordActionsProvider).deleteRecord(id);
+}
+
 class _TimerButton extends ConsumerStatefulWidget {
   const _TimerButton();
 
@@ -1554,6 +1667,57 @@ class _AllFilterChip extends StatelessWidget {
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// 「当前记录本」标识条：只在非默认记录本时出现。
+///
+/// 形态上跟筛选指示条（[_ActiveTagBanner]）学：一行的细条、跟着列表滚走、
+/// 不是常驻栏。它承载的是一句**状态**（我现在记在哪一本里），
+/// 右边的「切换」是直达记录本页的入口 —— 首页不承担管理能力，
+/// 只负责让人发现「自己不在默认那本上」这件事。
+class _ActiveBookBanner extends StatelessWidget {
+  const _ActiveBookBanner({required this.name, required this.onTap});
+
+  final String name;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 10, 8, 2),
+      child: Row(
+        children: <Widget>[
+          Icon(Icons.auto_stories_rounded, size: 15, color: scheme.primary),
+          const SizedBox(width: 6),
+          // 名字可能很长（上限 20 字）：占满剩余宽后省略，按钮始终露着。
+          Expanded(
+            child: Text(
+              '记录本：$name',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: theme.textTheme.labelMedium?.copyWith(
+                color: scheme.primary,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+          TextButton(
+            onPressed: onTap,
+            style: TextButton.styleFrom(
+              visualDensity: VisualDensity.compact,
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              minimumSize: const Size(0, 32),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+            child: const Text('切换记录本'),
+          ),
+        ],
       ),
     );
   }

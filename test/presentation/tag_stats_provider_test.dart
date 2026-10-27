@@ -17,6 +17,7 @@ final int _year = DateTime.now().year;
 
 RecordEntity _rec(String id, DateTime at, {List<String> tags = const <String>[]}) =>
     RecordEntity(
+      bookId: 'default',
       id: id,
       title: null,
       content: 'c',

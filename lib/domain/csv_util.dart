@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:uuid/uuid.dart';
 import 'package:vestige/data/database/app_database.dart';
 import 'package:vestige/domain/day_util.dart';
+import 'package:vestige/domain/record_book.dart';
 
 /// CSV 导入/导出（纯 Dart，零依赖，可单测）。
 ///
@@ -100,7 +101,10 @@ class CsvUtil {
 
   // ── 导入 ────────────────────────────────────────────────────────────
 
-  static CsvImportResult parse(String source) {
+  static CsvImportResult parse(
+    String source, {
+    String bookId = kDefaultBookId,
+  }) {
     // 剥掉 BOM。Dart 的 `utf8.decode` 本来就会吃掉文件开头的 BOM（所以从文件
     // 读进来时这里通常是空操作），但文本也可能来自剪贴板/字符串拼接，
     // 兜一层更稳，也顺带处理「有的工具重复写了两个 BOM」的情况。
@@ -188,6 +192,7 @@ class CsvUtil {
 
       records.add(
         RecordEntity(
+          bookId: bookId,
           id: _sanitizeId(rawId),
           title: title.isEmpty ? null : title,
           content: content,

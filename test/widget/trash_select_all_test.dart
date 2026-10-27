@@ -19,6 +19,7 @@ import 'package:vestige/presentation/screens/trash_screen.dart';
 import 'package:vestige/presentation/widgets/record_card.dart';
 
 RecordEntity _rec(String id, DateTime day) => RecordEntity(
+      bookId: 'default',
       id: id,
       title: null,
       content: '第 $id 条',

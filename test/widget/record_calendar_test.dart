@@ -19,6 +19,7 @@ RecordEntity _rec(
   String content = '1',
 }) =>
     RecordEntity(
+      bookId: 'default',
       id: id,
       title: null,
       content: content,

@@ -17,6 +17,7 @@ RecordEntity _rec(
 }) {
   final at = DateTime(2026, 9, 15, 10, 30);
   return RecordEntity(
+    bookId: 'default',
     id: id,
     title: title,
     content: '内容 $id',
