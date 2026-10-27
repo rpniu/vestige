@@ -1,5 +1,4 @@
 import 'package:file_selector/file_selector.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -18,10 +17,11 @@ import 'package:vestige/presentation/services/csv_file.dart';
 /// 我的：主题、数据管理（CSV 文件导入 / 导出）、关于。
 ///
 /// 数据管理一律走**真实文件**（`file_selector`）：
-/// - 导出：桌面端弹原生「另存为」；Android / iOS / Web 落临时文件交给系统分享
-///   （Web 直接分享文本，由浏览器承担下载）。
+/// - 导出：桌面端弹原生「另存为」；Android / iOS 落临时文件交给系统分享。
 /// - 导入：选一个 .csv 文件 → 解析 → 把结果（条数 / 补记条数 / 跳过的坏行）
 ///   摊开给用户确认 → 再写库。避免选错文件就直接改数据。
+///
+/// 2026-10-27：Web 目标已移除，原先为它保留的「分享文本 / 下载」分支一并删掉。
 class ProfileScreen extends ConsumerStatefulWidget {
   const ProfileScreen({super.key});
 
@@ -31,7 +31,7 @@ class ProfileScreen extends ConsumerStatefulWidget {
 
 class _ProfileScreenState extends ConsumerState<ProfileScreen> {
   /// CSV 类型过滤器：各平台认的字段不同——Android 看 mimeTypes、
-  /// iOS/macOS 看 UTI、桌面看 extensions、Web 看 webWildCards，所以四个都给上。
+  /// iOS/macOS 看 UTI、桌面看 extensions，所以三个都给上。
   static const List<XTypeGroup> _csvTypeGroups = <XTypeGroup>[
     XTypeGroup(
       label: 'CSV 文件',
@@ -42,7 +42,6 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
         'text/plain',
       ],
       uniformTypeIdentifiers: <String>['public.comma-separated-values-text'],
-      webWildCards: <String>['.csv', 'text/csv'],
     ),
   ];
 
@@ -55,6 +54,9 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
   Widget build(BuildContext context) {
     final settings = ref.watch(themeProvider);
     final stats = ref.watch(recordStatsProvider);
+    // 读取失败时不能把「共 0 条记录」当成事实展示（2026-10-27 审查 C-001）：
+    // 头卡改为显示失败，数据管理入口照旧可用（导出/导入会自己报错）。
+    final recordsFailed = ref.watch(recordsProvider).hasError;
     final layout = ref.watch(homeButtonLayoutProvider);
 
     return Scaffold(
@@ -62,7 +64,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
       body: ListView(
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
         children: <Widget>[
-          _HeaderCard(stats: stats),
+          _HeaderCard(stats: stats, failed: recordsFailed),
           const SizedBox(height: 24),
 
           _SectionTitle('配色方案'),
@@ -134,7 +136,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                 _ActionTile(
                   icon: Icons.file_download_outlined,
                   title: '导出 CSV 文件',
-                  subtitle: kIsWeb ? '下载 CSV 备份' : '选择保存位置，或分享给别人',
+                  subtitle: '选择保存位置，或分享给别人',
                   enabled: !_busy,
                   onTap: _exportCsv,
                 ),
@@ -209,17 +211,15 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
           'vestige_export_${DateTime.now().millisecondsSinceEpoch}.csv';
 
       // 1) 桌面端等支持另存为的平台：弹原生保存对话框
-      if (!kIsWeb) {
-        final path = await _pickSavePath(fileName);
-        if (path == _cancelled) return; // 用户取消，不再弹分享面板
-        if (path != null) {
-          final ok = await writeCsvToPath(path, csv);
-          if (mounted) _toast(ok ? '已导出到 $path' : '写入文件失败：$path');
-          return;
-        }
+      final path = await _pickSavePath(fileName);
+      if (path == _cancelled) return; // 用户取消，不再弹分享面板
+      if (path != null) {
+        final ok = await writeCsvToPath(path, csv);
+        if (mounted) _toast(ok ? '已导出到 $path' : '写入文件失败：$path');
+        return;
       }
 
-      // 2) 移动端 / Web：临时文件 + 系统分享（Web 分享文本，浏览器负责下载）
+      // 2) 移动端（Android / iOS 没有「另存为」）：临时文件 + 系统分享
       final tempPath = await writeTempCsv(csv, fileName);
       final shared = tempPath == null
           ? await _tryShare(ShareParams(text: csv, subject: 'Vestige 数据导出'))
@@ -242,6 +242,10 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
 
   /// 调起原生保存对话框。返回用户选定路径；
   /// 返回 [_cancelled] = 用户取消；返回 null = 平台不支持（Android / iOS）。
+  ///
+  /// 只把「平台没实现」当作不支持（2026-10-27 审查 m-005）：权限不足、磁盘满这类
+  /// 真实故障必须上抛，否则会被静默当成「不支持另存为」而转去系统分享 ——
+  /// 用户看到「已调起分享」，却不知道真正想要的导出已经失败。
   Future<String?> _pickSavePath(String suggestedName) async {
     try {
       final location = await getSaveLocation(
@@ -255,8 +259,6 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     } on UnimplementedError {
       return null; // Android / iOS 未实现另存为
     } on UnsupportedError {
-      return null;
-    } catch (_) {
       return null;
     }
   }
@@ -493,9 +495,13 @@ class _ImportPreviewDialog extends StatelessWidget {
 }
 
 class _HeaderCard extends StatelessWidget {
-  const _HeaderCard({required this.stats});
+  const _HeaderCard({required this.stats, this.failed = false});
 
   final RecordStats stats;
+
+  /// 记录读不出来（库打不开 / 查询失败）。此时数字没有任何意义，
+  /// 必须显式说明，而不是显示「共 0 条记录」。
+  final bool failed;
 
   @override
   Widget build(BuildContext context) {
@@ -562,18 +568,20 @@ class _HeaderCard extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: <Widget>[
                       Text(
-                        '共 ${stats.totalCount} 条记录',
+                        failed ? '记录读取失败' : '共 ${stats.totalCount} 条记录',
                         style: theme.textTheme.titleMedium
                             ?.copyWith(
                               fontWeight: FontWeight.w800,
-                              color: scheme.primary,
+                              color: failed ? scheme.error : scheme.primary,
                             )
                             .tabular,
                       ),
                       const SizedBox(height: 4),
                       Text(
-                        '活跃 ${stats.activeDays} 天 · 连续 ${stats.streak} 天'
-                        '${stats.backfilledCount > 0 ? ' · 补记 ${stats.backfilledCount} 条' : ''}',
+                        failed
+                            ? '数据可能仍在本地，请在首页重试一次'
+                            : '活跃 ${stats.activeDays} 天 · 连续 ${stats.streak} 天'
+                                  '${stats.backfilledCount > 0 ? ' · 补记 ${stats.backfilledCount} 条' : ''}',
                         style: theme.textTheme.labelSmall
                             ?.copyWith(
                               color: scheme.onPrimaryContainer.withValues(

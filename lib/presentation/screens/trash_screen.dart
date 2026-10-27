@@ -229,8 +229,10 @@ class _TrashScreenState extends ConsumerState<TrashScreen> {
 
   /// 显示一条**带「撤销」**的提示（可撤销的操作都用它）。
   ///
-  /// 撤销的是历史里最新那一步，也就是刚做的那一步 —— 每条提示都会先收掉上一条，
-  /// 所以屏幕上这条永远对应最新的一步。与首页同一套做法。
+  /// 撤销的目标是**这次操作刚写下的那条 history 条目**（`lastUndoEntryId`），
+  /// 不是「历史里最新的一步」：当操作没有产生历史（快照为空）时，
+  /// 退最新一步会退掉上一个不相关的操作（2026-10-27 审查 M-007）。
+  /// 所以没有可回退条目时退化成普通提示，不挂按钮。
   ///
   /// 时长 3 秒（与首页同一档）：撤销历史保留 20 步且不过期，错过这个窗口
   /// 还能去「操作历史」退，所以提示条不必久留。
@@ -239,6 +241,11 @@ class _TrashScreenState extends ConsumerState<TrashScreen> {
   /// 带按钮的提示条默认**永不自动消失**，duration 会被忽略
   /// （见 material/snack_bar.dart 里 persist 的文档）。
   void _toastUndoable(String message) {
+    final entryId = ref.read(recordActionsProvider).lastUndoEntryId;
+    if (entryId == null) {
+      _toast(message);
+      return;
+    }
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(
@@ -257,21 +264,21 @@ class _TrashScreenState extends ConsumerState<TrashScreen> {
           ),
           duration: const Duration(seconds: 3),
           persist: false,
-          action: SnackBarAction(label: '撤销', onPressed: _undoLatest),
+          action: SnackBarAction(
+            label: '撤销',
+            onPressed: () => _undoEntry(entryId),
+          ),
         ),
       );
   }
 
-  /// 撤销最近一步。
+  /// 撤销**指定的那一步**（及比它更新的步骤）。
   ///
   /// 这里最有用的一档是「**清空回收站之后后悔**」：快照里带着完整字段，
   /// 撤销会把那些记录原样插回来。
-  Future<void> _undoLatest() async {
+  Future<void> _undoEntry(int entryId) async {
     final actions = ref.read(recordActionsProvider);
-    final history = await actions.recentUndo();
-    if (history.isEmpty || !mounted) return;
-
-    final restored = await actions.undoUpTo(history.first.id);
+    final restored = await actions.undoUpTo(entryId);
     if (!mounted) return;
     ScaffoldMessenger.of(context).hideCurrentSnackBar();
     _toast(restored == 0 ? '没有可回滚的内容' : '已撤销，$restored 条记录回到操作前');

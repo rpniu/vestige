@@ -5,6 +5,7 @@ import 'package:vestige/app/theme.dart';
 import 'package:vestige/domain/duration_format.dart';
 import 'package:vestige/presentation/providers/records_provider.dart';
 import 'package:vestige/presentation/widgets/center_dialog.dart';
+import 'package:vestige/presentation/widgets/error_state.dart';
 import 'package:vestige/presentation/widgets/monthly_bar_chart.dart';
 import 'package:vestige/presentation/widgets/record_calendar.dart';
 
@@ -35,6 +36,19 @@ class StatsScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    // 错误态优先于一切：数据读不出来时，下面每一张卡都会算成 0/空 ——
+    // 那与「统计确实是空的」无法区分，属于误导（2026-10-27 审查 C-001）。
+    final recordsAsync = ref.watch(recordsProvider);
+    if (recordsAsync.hasError) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('统计')),
+        body: VestigeErrorState(
+          error: recordsAsync.error!,
+          onRetry: () => ref.invalidate(recordsProvider),
+        ),
+      );
+    }
+
     final stats = ref.watch(recordStatsProvider);
     final monthly = ref.watch(monthlyStatsProvider);
     // 窗口长度由洞察卡标题右边那颗选择器控制（见 insightWindowProvider）。

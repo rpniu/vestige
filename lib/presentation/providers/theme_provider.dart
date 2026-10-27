@@ -76,16 +76,6 @@ class ThemeController extends Notifier<ThemeSettings> {
     ref.read(sharedPreferencesProvider).setString(_keyMode, mode.name);
   }
 
-  /// 在 跟随系统 → 浅色 → 深色 之间循环（顶栏快捷按钮用）。
-  void cycleMode(Brightness platformBrightness) {
-    final effective = switch (state.mode) {
-      ThemeMode.system => platformBrightness,
-      ThemeMode.light => Brightness.light,
-      ThemeMode.dark => Brightness.dark,
-    };
-    setMode(effective == Brightness.dark ? ThemeMode.light : ThemeMode.dark);
-  }
-
   static AppThemeVariant _variantFrom(String? name) {
     for (final v in AppThemeVariant.values) {
       if (v.name == name) return v;

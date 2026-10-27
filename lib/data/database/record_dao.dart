@@ -5,6 +5,13 @@ import 'record.dart';
 
 part 'record_dao.g.dart';
 
+/// 搜索结果条数上限。
+///
+/// 搜索是逐键触发的，一口气返回几万条没有意义，超出只会让用户更难翻。
+/// 定义成公开常量是为了让 UI 能**如实说明**「结果被截断了」——
+/// 否则「共 200 条结果」会被读成「一共就这么多」（2026-10-27 审查 m-002）。
+const int kSearchResultLimit = 200;
+
 /// 记录 DAO（对应原 Kotlin 的 RecordDao，v2 版）。
 ///
 /// 与 v1 的差别：所有列表/排序一律按 **recordedAt**（业务日期）而非 createdAt，
@@ -17,20 +24,6 @@ class RecordDao extends DatabaseAccessor<VestigeDatabase>
 
   /// 活跃记录（未软删），按业务日期倒序。响应式 Stream。
   Stream<List<RecordEntity>> watchAllActive() => _activeQuery().watch();
-
-  /// 只看某个时间点之后的活跃记录（近 N 天图表用，减少无谓遍历）。
-  Stream<List<RecordEntity>> watchActiveSince(DateTime from) =>
-      (select(records)
-            ..where(
-              (r) =>
-                  r.deleted.equals(false) &
-                  r.recordedAt.isBiggerOrEqualValue(from),
-            )
-            ..orderBy([
-              (r) => OrderingTerm.desc(r.recordedAt),
-              (r) => OrderingTerm.desc(r.createdAt),
-            ]))
-          .watch();
 
   /// 按 id 查单条（编辑页加载用）。
   Future<RecordEntity?> getById(String id) =>
@@ -83,14 +76,6 @@ class RecordDao extends DatabaseAccessor<VestigeDatabase>
     );
   }
 
-  /// 活跃记录总数。
-  Future<int> getActiveCount() {
-    final expr = countAll(filter: records.deleted.equals(false));
-    return (selectOnly(records)..addColumns([expr]))
-        .getSingle()
-        .then((row) => row.read(expr) ?? 0);
-  }
-
   /// 活跃记录同步获取（CSV 导出用），按业务日期倒序。
   Future<List<RecordEntity>> getAllActiveSync() => _activeQuery().get();
 
@@ -113,7 +98,7 @@ class RecordDao extends DatabaseAccessor<VestigeDatabase>
   /// 超出只会让用户更难翻。
   Future<List<RecordEntity>> searchActive(
     String query, {
-    int limit = 200,
+    int limit = kSearchResultLimit,
     DateTime? from,
     DateTime? to,
   }) {
@@ -187,9 +172,11 @@ class RecordDao extends DatabaseAccessor<VestigeDatabase>
   Future<void> hardDelete(String id) =>
       (delete(records)..where((r) => r.id.equals(id))).go();
 
-  /// 批量彻底删除。
-  Future<void> hardDeleteMany(List<String> ids) =>
-      (delete(records)..where((r) => r.id.isIn(ids))).go();
+  /// 批量彻底删除。空列表直接返回：`IN ()` 是非法 SQL。
+  Future<void> hardDeleteMany(List<String> ids) {
+    if (ids.isEmpty) return Future<void>.value();
+    return (delete(records)..where((r) => r.id.isIn(ids))).go();
+  }
 
   /// 清空回收站。
   Future<int> emptyTrash() =>
@@ -259,29 +246,34 @@ class RecordDao extends DatabaseAccessor<VestigeDatabase>
   /// 2. 影响 0 行说明这行**已经被彻底删掉了** → 用 `INSERT` 插回去。
   ///
   /// 第 2 步是「撤销清空回收站」能救回记录的关键。
+  ///
+  /// 列清单必须与 `RecordsCompanion` 的全部可写列保持同步 —— 漏一列，
+  /// 「撤销彻底删除」把它插回来时那一列就是空值（`durationS` 曾因此丢失）。
+  ///
+  /// **原子性由调用方提供**：`RecordRepository.undoUpTo` 把「写回 + 删历史」
+  /// 包在同一个事务里。本方法自己不再开事务，避免双层包装产生嵌套事务。
   Future<void> restoreRows(List<RecordEntity> rows) async {
     if (rows.isEmpty) return;
-    await transaction(() async {
-      for (final r in rows) {
-        // 不含 id：它是 WHERE 条件，不该被写进 SET
-        final fields = RecordsCompanion(
-          title: Value(r.title),
-          content: Value(r.content),
-          tags: Value(r.tags),
-          recordedAt: Value(r.recordedAt),
-          createdAt: Value(r.createdAt),
-          updatedAt: Value(r.updatedAt),
-          deleted: Value(r.deleted),
-          deletedAt: Value(r.deletedAt),
-        );
+    for (final r in rows) {
+      // 不含 id：它是 WHERE 条件，不该被写进 SET
+      final fields = RecordsCompanion(
+        title: Value(r.title),
+        content: Value(r.content),
+        tags: Value(r.tags),
+        recordedAt: Value(r.recordedAt),
+        createdAt: Value(r.createdAt),
+        updatedAt: Value(r.updatedAt),
+        deleted: Value(r.deleted),
+        deletedAt: Value(r.deletedAt),
+        durationS: Value(r.durationS),
+      );
 
-        final affected =
-            await (update(records)..where((t) => t.id.equals(r.id))).write(fields);
-        if (affected == 0) {
-          await into(records).insert(fields.copyWith(id: Value(r.id)));
-        }
+      final affected =
+          await (update(records)..where((t) => t.id.equals(r.id))).write(fields);
+      if (affected == 0) {
+        await into(records).insert(fields.copyWith(id: Value(r.id)));
       }
-    });
+    }
   }
 
   /// 活跃记录的基础查询：过滤软删 + 按业务日期倒序。

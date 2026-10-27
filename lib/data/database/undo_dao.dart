@@ -20,7 +20,10 @@ class UndoDao extends DatabaseAccessor<VestigeDatabase> with _$UndoDaoMixin {
   UndoDao(super.db);
 
   /// 记一次操作。[snapshot] 是**操作前**的记录快照 JSON。
-  Future<void> push({
+  ///
+  /// 返回新条目的 rowid —— 调用方据此精确撤销「刚做的这一步」，
+  /// 不必假设「历史里最新的一定是我」（见 RecordActions.lastUndoEntryId）。
+  Future<int> push({
     required String label,
     required String snapshot,
     required int recordCount,

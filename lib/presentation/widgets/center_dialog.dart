@@ -37,14 +37,16 @@ Future<T?> showVestigeCenterDialog<T>({
         shape: RoundedRectangleBorder(borderRadius: VestigeRadius.mediumAll),
         child: ConstrainedBox(
           constraints: BoxConstraints(
-            // 小内容（比如只有两三年的年份列表）也不至于缩成一条窄带。
-            // 560 = 上限：桌面上是一整块铺开的矩形容器；
-            // 窄屏上被 inset 夹住时自动取屏宽（Constraints 归一化会钳到外部 max）。
-            minWidth: 560,
+            // 宽度：窄屏吃满可用宽、宽屏封顶 560。
+            //
+            // 用「无限宽 + maxWidth 夹取」而不是 `minWidth/maxWidth 都写 560`
+            // （2026-10-27 审查 m-009）：后者在 360dp 的手机上要靠 BoxConstraints
+            // 归一化把 560 夹到父级上限才成立 —— 那是框架内部行为，不是我们声明的意图。
+            // 现在由 dialog 自己的子项声明「我要多宽」，语义与结果一致。
             maxWidth: 560,
             maxHeight: MediaQuery.sizeOf(dialogContext).height * maxHeightFactor,
           ),
-          child: builder(dialogContext),
+          child: SizedBox(width: double.infinity, child: builder(dialogContext)),
         ),
       );
     },

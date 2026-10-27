@@ -1,4 +1,3 @@
-import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:vestige/app/motion.dart';
@@ -144,11 +143,16 @@ class _EditBody extends StatelessWidget {
     if (!context.mounted) return;
     if (ok) {
       Navigator.of(context).maybePop();
-    } else {
-      ScaffoldMessenger.of(context)
-        ..hideCurrentSnackBar()
-        ..showSnackBar(const SnackBar(content: Text('内容不能为空')));
+      return;
     }
+    // 失败有两种原因：内容为空（保存前的校验）、或写库抛异常。
+    // 原先一律提示「内容不能为空」，写库失败时会把用户引向错误的方向 ——
+    // 他确实写了内容，却被告知没写（2026-10-27 审查 M-002）。
+    // 异常原因已经由 controller 记在 state.error 里，优先原样转述。
+    final error = controller.lastError;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(error ?? '内容不能为空')));
   }
 
   Future<void> _confirmDelete(BuildContext context) async {
@@ -912,6 +916,17 @@ class _DurationPickerDialogState extends State<_DurationPickerDialog> {
   late int _minutes = ((widget.initialSeconds ?? 0) % 3600) ~/ 60;
   late int _seconds = (widget.initialSeconds ?? 0) % 60;
 
+  /// 「时」轮的项数。
+  ///
+  /// 固定 24 项时，`initialSeconds` 超过 24 小时的记录（开着计时忘了关、或 CSV 导入
+  /// 带来的时长）会让 `FixedExtentScrollController(initialItem: 47)` 越界：滚动位被
+  /// 自动夹到 23，标题却仍显示 47 小时；用户随手滚一下就把时长**静默改小**落库
+  /// （2026-10-27 审查 M-001）。
+  ///
+  /// 改为「至少 24 项，且永远给当前值留一个合法落点」，越界因此不存在。
+  /// 项数没有绝对上界，靠滚轮的惰性构建扛住（见 [_wheel] 的 ChildBuilderDelegate）。
+  int get _hourCount => _hours < 24 ? 24 : _hours + 1;
+
   late final FixedExtentScrollController _hourController =
       FixedExtentScrollController(initialItem: _hours);
   late final FixedExtentScrollController _minuteController =
@@ -1040,7 +1055,7 @@ class _DurationPickerDialogState extends State<_DurationPickerDialog> {
                       Expanded(
                         child: _wheel(
                           controller: _hourController,
-                          count: 24,
+                          count: _hourCount,
                           unit: '时',
                           onChanged: (v) => setState(() => _hours = v),
                         ),
@@ -1095,6 +1110,14 @@ class _DurationPickerDialogState extends State<_DurationPickerDialog> {
     );
   }
 
+  /// 一个滚轮。
+  ///
+  /// 用 `ListWheelScrollView.useDelegate` 而不是 `CupertinoPicker(children: [...])`：
+  /// 后者的 `children` 是**先全部构造**再交给视图的，项数一大（「时」轮要给超长
+  /// 时长留落点）就会一次性建出上千个 Text。`ChildBuilderDelegate` 只建可见的
+  /// 那十来个，项数因此不再有实际约束（2026-10-27 审查 M-001）。
+  ///
+  /// 其余参数照 `CupertinoPicker` 的缺省值配，观感与原先一致。
   Widget _wheel({
     required FixedExtentScrollController controller,
     required int count,
@@ -1103,29 +1126,28 @@ class _DurationPickerDialogState extends State<_DurationPickerDialog> {
   }) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
-    return CupertinoPicker(
-      scrollController: controller,
+    return ListWheelScrollView.useDelegate(
+      controller: controller,
       itemExtent: 38,
       magnification: 1.1,
       squeeze: 1.1,
-      looping: false,
-      backgroundColor: Colors.transparent,
-      // 默认的选中框是两条横线，和下面自绘的选中带叠在一起会很乱
-      selectionOverlay: const SizedBox.shrink(),
+      diameterRatio: 1.1,
+      perspective: 0.003,
+      useMagnifier: true,
       onSelectedItemChanged: onChanged,
-      children: <Widget>[
-        for (var i = 0; i < count; i++)
-          Center(
-            child: Text(
-              '$i $unit',
-              style: theme.textTheme.titleMedium?.copyWith(
-                fontWeight: FontWeight.w700,
-                fontFeatures: const <FontFeature>[FontFeature.tabularFigures()],
-                color: scheme.onSurface,
-              ),
+      childDelegate: ListWheelChildBuilderDelegate(
+        childCount: count,
+        builder: (BuildContext context, int i) => Center(
+          child: Text(
+            '$i $unit',
+            style: theme.textTheme.titleMedium?.copyWith(
+              fontWeight: FontWeight.w700,
+              fontFeatures: const <FontFeature>[FontFeature.tabularFigures()],
+              color: scheme.onSurface,
             ),
           ),
-      ],
+        ),
+      ),
     );
   }
 }

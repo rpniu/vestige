@@ -1,7 +1,7 @@
 import 'package:drift/drift.dart';
 import 'package:uuid/uuid.dart';
 
-import 'connection/connection.dart';
+import 'connection/native.dart';
 import 'record.dart';
 import 'record_dao.dart';
 import 'undo_entry.dart';
@@ -9,7 +9,10 @@ import 'undo_entry.dart';
 part 'app_database.g.dart';
 
 /// 应用数据库，对应原 Kotlin 的 VestigeDatabase（Room）。
-/// 平台差异（原生 SQLite / Web IndexedDB）全部藏在 connection 层。
+///
+/// 目标平台只有原生（Android / iOS / Windows / macOS / Linux）。Web 目标于
+/// 2026-10-27 移除 —— 它需要 `drift/wasm` 而不是 `drift/web` 才能跑，
+/// 而 `drift/web` 已被上游弃用；与其维护一条编译不过的路径，不如明确不支持。
 ///
 /// ## 版本历史
 /// - v1：单时间戳 createdAt。
@@ -71,6 +74,12 @@ class VestigeDatabase extends _$VestigeDatabase {
   /// 每一步都先探测现状再动手（见 [_columnExists] 的说明）——
   /// 对「结构已经是新版、只有版本号滞后」的库，各步自然跳过，
   /// 等价于把版本号补齐，用户数据原样可读。
+  ///
+  /// **降级也走这里**（2026-10-27 审查 M-008 的核实结论）：drift 的
+  /// `OpeningDetails.hadUpgrade` 定义是 `versionBefore != versionNow`，
+  /// 降级时它同样调用本方法，只是 `from > to`。而下面每一步都以 `from < N`
+  /// 为条件，于是全部跳过 —— 结构保持原样、版本号被写回旧值，数据可继续读。
+  /// 这正是想要的行为，不需要（drift 也没有）单独的 `onDowngrade` 钩子。
   @override
   MigrationStrategy get migration => MigrationStrategy(
         onCreate: (m) => m.createAll(),

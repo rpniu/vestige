@@ -39,7 +39,7 @@ abstract final class AppRoutes {
     return params.isEmpty ? edit : '$edit?${params.join('&')}';
   }
 
-  static String editExisting(String id) => '$edit/$id';
+  static String editExisting(String id) => '$edit/${Uri.encodeComponent(id)}';
 }
 
 final routerProvider = Provider<GoRouter>((ref) => createRouter());
@@ -90,7 +90,7 @@ GoRouter createRouter() => GoRouter(
         GoRoute(
           path: ':id',
           builder: (context, state) =>
-              EditScreen(recordId: state.pathParameters['id']),
+              EditScreen(recordId: _recordIdOf(state)),
         ),
       ],
     ),
@@ -114,6 +114,17 @@ GoRouter createRouter() => GoRouter(
 DateTime? _parseDay(String? raw) {
   if (raw == null || raw.isEmpty) return null;
   return DateTime.tryParse(raw);
+}
+
+/// 从 `/edit/<id>` 里取出记录 id。
+///
+/// 走 `state.uri.pathSegments`（`Uri` 按规范**解码一次**）而不是 `pathParameters`：
+/// 写入侧是 [AppRoutes.editExisting] 的 `Uri.encodeComponent`，读取侧必须恰好解一次 ——
+/// 编码没解会让含 `/`、空格、中文的 id 查不到库，解两次则会把 id 里本来就有的
+/// `%` 序列改坏。两者都只在「特殊 id」上暴露，靠肉眼很难发现（2026-10-27 审查 M-004）。
+String? _recordIdOf(GoRouterState state) {
+  final segments = state.uri.pathSegments;
+  return segments.length >= 2 ? segments.last : null;
 }
 
 class _ShellScaffold extends ConsumerWidget {

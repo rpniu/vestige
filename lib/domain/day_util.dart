@@ -286,8 +286,4 @@ extension RecordEntityDateX on RecordEntity {
   /// 归属日是否为今天。
   bool isRecordedToday([DateTime? now]) =>
       isSameDay(recordedAt, now ?? DateTime.now());
-
-  /// 是否在指定日期区间内（含首尾天）。
-  bool isInDayRange(DateTime from, DateTime to) =>
-      !recordedAt.isBefore(dayStart(from)) && recordedAt.isBefore(nextDayStart(to));
 }

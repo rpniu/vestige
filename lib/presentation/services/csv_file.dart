@@ -1,8 +1,36 @@
-/// 条件导出：CSV 落盘能力的平台实现。
-///
-/// 原因：`dart:io`（写文件）与 `path_provider` 在 Web 上不可用，而导入导出在
-/// 原生平台需要真实文件。把平台差异封在这一层，页面代码保持平台无关
-/// （与 `data/database/connection` 的做法一致）。
-library;
+import 'dart:io';
 
-export './csv_file_native.dart' if (dart.library.html) './csv_file_web.dart';
+import 'package:path_provider/path_provider.dart';
+
+/// CSV 落盘能力（原生实现）。
+///
+/// 2026-10-27：**Web 目标已移除**（用户决定）。此前这里是一层条件导出
+/// （`if (dart.library.js_interop) csv_file_web.dart`），web 版本恒失败、
+/// 让页面退回「分享文本」；现在只剩原生实现，平台分支不再需要。
+///
+/// 两个函数都**不抛异常**，用返回值表达结果：失败路径（磁盘满、权限、
+/// 临时目录不可写）在真实设备上很常见，让调用方用 `try/catch` 接住反而容易漏；
+/// 返回 null / false 时页面会明确提示用户。
+
+/// 把 CSV 写进应用临时目录，返回文件路径（移动端交给系统分享用）。
+/// 失败返回 null，调用方应退回「分享文本」。
+Future<String?> writeTempCsv(String csv, String fileName) async {
+  try {
+    final dir = await getTemporaryDirectory();
+    final file = File('${dir.path}/$fileName');
+    await file.writeAsString(csv);
+    return file.path;
+  } catch (_) {
+    return null;
+  }
+}
+
+/// 把 CSV 写到用户选定的路径（桌面端「另存为」用）。
+Future<bool> writeCsvToPath(String path, String csv) async {
+  try {
+    await File(path).writeAsString(csv, flush: true);
+    return true;
+  } catch (_) {
+    return false;
+  }
+}

@@ -118,4 +118,34 @@ void main() {
 
     await drain(tester);
   });
+
+  testWidgets('47 小时的记录：时轮能显示 47，不改任何东西也不会被截断', (tester) async {
+    // 2026-10-27 审查 M-001：时轮原先固定 24 项，>24h 的值（跨天计时、CSV 导入）
+    // 会让 FixedExtentScrollController(initialItem: 47) 越界，滚动位被夹到 23 ——
+    // 用户一滚就把时长静默改小。这里钉住「47 有合法落点」与「原值不被改」。
+    const longDuration = 47 * 3600 + 30 * 60; // 47 小时 30 分
+    await repo.addRecord(content: '一条长记录', durationSec: longDuration);
+    final id = (await repo.getAllActiveRecordsSync()).single.id;
+
+    await pumpEdit(tester, id);
+    await tester.tap(find.text('时长（选填）'));
+    await tester.pumpAndSettle();
+
+    // 时轮必须真的能落到 47（固定 24 项时这一项根本不存在）
+    expect(find.text('47 时'), findsOneWidget, reason: '时轮项数应随当前值扩展');
+
+    await tester.tap(find.text('确定'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('保存'));
+    await tester.pumpAndSettle();
+    final saved = (await repo.getAllActiveRecordsSync()).single;
+    expect(
+      saved.durationS,
+      longDuration,
+      reason: '只是打开又确定，时长必须一秒不差地保留',
+    );
+
+    await drain(tester);
+  });
 }

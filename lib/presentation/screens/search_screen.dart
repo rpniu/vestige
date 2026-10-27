@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 import 'package:vestige/app/router.dart';
 import 'package:vestige/app/theme.dart';
 import 'package:vestige/data/database/app_database.dart';
+import 'package:vestige/data/database/record_dao.dart' show kSearchResultLimit;
 import 'package:vestige/presentation/providers/core_providers.dart';
 import 'package:vestige/presentation/providers/search_history_provider.dart';
 import 'package:vestige/presentation/widgets/empty_state.dart';
@@ -221,7 +222,12 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
           child: Row(
             children: <Widget>[
               Text(
-                '共 ${results.length} 条结果',
+                // 达到上限时必须说清「还有更多」（2026-10-27 审查 m-002）：
+                // 仓储侧 `searchActive` 最多返回 kSearchResultLimit 条，
+                // 只说「共 N 条结果」会把截断值读成总条数。
+                results.length >= kSearchResultLimit
+                    ? '已显示前 $kSearchResultLimit 条（还有更多，请加关键词或缩小日期范围）'
+                    : '共 ${results.length} 条结果',
                 style: theme.textTheme.labelSmall?.copyWith(
                   color: scheme.onSurfaceVariant,
                 ),

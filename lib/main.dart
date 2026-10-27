@@ -12,7 +12,16 @@ import 'package:vestige/presentation/providers/theme_provider.dart';
 /// 避免冷启动时先渲染默认配色再跳变。
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  final prefs = await SharedPreferences.getInstance();
+  final SharedPreferences prefs;
+  try {
+    prefs = await SharedPreferences.getInstance();
+  } catch (error) {
+    // 读不到本地配置时**不能**继续往下跑：主题 / 计时 / 搜索历史三个 provider
+    // 都依赖这个实例，缺了它会在首帧就抛 UnimplementedError，用户只看到白屏
+    // （2026-10-27 审查 m-006）。这里退成一个最小可读的失败页，把原因说出来。
+    runApp(_StartupFailureApp(error: error));
+    return;
+  }
 
   runApp(
     ProviderScope(
@@ -22,6 +31,45 @@ Future<void> main() async {
       child: const VestigeApp(),
     ),
   );
+}
+
+/// 启动阶段的兜底页：只展示失败原因，不依赖任何 provider。
+class _StartupFailureApp extends StatelessWidget {
+  const _StartupFailureApp({required this.error});
+
+  final Object error;
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      debugShowCheckedModeBanner: false,
+      home: Scaffold(
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(28),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: <Widget>[
+                const Icon(Icons.error_outline_rounded, size: 44),
+                const SizedBox(height: 14),
+                const Text(
+                  '本地配置读取失败，无法启动',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  '$error',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(fontSize: 12),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class VestigeApp extends ConsumerWidget {

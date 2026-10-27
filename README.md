@@ -11,7 +11,11 @@
 - **可撤销**：批量操作前先落库快照，跨会话可回退（保留最近 20 步操作历史）
 - **回收站**：软删除 + 恢复
 - **CSV 导入 / 导出**：完整备份，跨设备迁移
-- **多平台**：Android / Windows / macOS / Linux / iOS / Web
+- **多平台**：Android / Windows / macOS / Linux / iOS
+
+> **不支持 Web（2026-10-27 移除）**：数据库用的是 drift，web 端要跑起来需要 `drift/wasm`
+> （`drift/web` 已被上游弃用），同时目录/文件能力（`dart:io` + `path_provider`）在 web 上
+> 得另写一套实现。与其留一条编译不过的路径，不如明确不支持 —— 只保留原生五端。
 
 ## 技术栈
 

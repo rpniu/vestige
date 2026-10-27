@@ -19,14 +19,9 @@ class RecordRepository {
 
   Stream<List<RecordEntity>> watchAllRecords() => _dao.watchAllActive();
 
-  Stream<List<RecordEntity>> watchRecordsSince(DateTime from) =>
-      _dao.watchActiveSince(from);
-
   Stream<List<RecordEntity>> watchDeletedRecords() => _dao.watchDeleted();
 
   Future<RecordEntity?> getRecordById(String id) => _dao.getById(id);
-
-  Future<int> getActiveCount() => _dao.getActiveCount();
 
   Future<List<RecordEntity>> getAllActiveRecordsSync() =>
       _dao.getAllActiveSync();
@@ -105,16 +100,6 @@ class RecordRepository {
       ),
     );
   }
-
-  /// 只改业务日期 —— 「昨天忘了记，今天补上」的最轻量入口。
-  Future<void> updateRecordedAt(String id, DateTime recordedAt) =>
-      _dao.replace(
-        RecordsCompanion(
-          id: Value(id),
-          recordedAt: Value(recordedAt),
-          updatedAt: Value(DateTime.now()),
-        ),
-      );
 
   /// 批量把一批记录的日期整体平移（多选补记用）：+1 天 / -1 天。
   ///
@@ -203,18 +188,29 @@ class RecordRepository {
   /// 回收站里的全部记录（**清空回收站前存快照用**）。
   Future<List<RecordEntity>> getDeletedRecords() => _dao.getDeletedSync();
 
+  /// 把一组读写包进**一个事务**。
+  ///
+  /// 用于「业务动作 + 撤销快照」必须同生共死的场景（2026-10-27 审查 M-006）：
+  /// 任何一步失败都不该留下「数据改了、历史没记」的中间态。
+  Future<T> transaction<T>(Future<T> Function() action) =>
+      _dao.db.transaction(action);
+
   /// 记一步可撤销的操作。
   ///
   /// [before] 是**操作前**的整行快照。空快照不记录 —— 没有可回滚的内容，
   /// 留一条无法生效的条目只会干扰列表。
-  Future<void> pushUndo(String label, List<RecordEntity> before) async {
-    if (before.isEmpty) return;
-    await _undo.push(
+  ///
+  /// 返回新历史条目的 id；**快照为空时返回 null**（表示这次操作没有产生回退点，
+  /// UI 据此不挂「撤销」按钮 —— 见 RecordActions.lastUndoEntryId）。
+  Future<int?> pushUndo(String label, List<RecordEntity> before) async {
+    if (before.isEmpty) return null;
+    final id = await _undo.push(
       label: label,
       snapshot: RecordSnapshot.encode(before),
       recordCount: before.length,
     );
     await _undo.trim();
+    return id;
   }
 
   /// 最近的撤销历史（新的在前）。
@@ -257,8 +253,12 @@ class RecordRepository {
       }
     }
 
-    await _dao.restoreRows(byId.values.toList(growable: false));
-    await _undo.deleteFrom(entryId);
+    // 写回数据与删除历史必须原子（2026-10-27 审查 m-010）：只写回一半、
+    // 历史却还在，用户再点一次会重复写回；反过来历史没了、数据没写回则无法重试。
+    await transaction(() async {
+      await _dao.restoreRows(byId.values.toList(growable: false));
+      await _undo.deleteFrom(entryId);
+    });
     return byId.length;
   }
 

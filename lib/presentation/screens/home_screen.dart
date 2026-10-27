@@ -17,6 +17,7 @@ import 'package:vestige/presentation/providers/home_layout_provider.dart';
 import 'package:vestige/presentation/providers/records_provider.dart';
 import 'package:vestige/presentation/widgets/batch_tag_sheet.dart';
 import 'package:vestige/presentation/widgets/entrance.dart';
+import 'package:vestige/presentation/widgets/error_state.dart';
 import 'package:vestige/presentation/widgets/center_dialog.dart';
 import 'package:vestige/presentation/widgets/record_card.dart';
 import 'package:vestige/presentation/widgets/row_metrics.dart';
@@ -151,7 +152,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     //
     // 候选集 = 「当前屏幕上看得见的这些」。它同时是三态全选框的判据和剪枝的依据 ——
     // 勾选集必须始终是候选集的子集，否则「移入回收站」会删掉用户没看见的记录。
-    final candidates = _selectableIds;
+    final candidates = _selectableIdsOf(rows);
 
     // 记录被删掉、或被标签筛掉之后，把失效的勾选清掉。
     // 放在 build 里而不是写数据的地方：候选集是**派生**的，只有 build 知道它现在是什么。
@@ -186,7 +187,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                     // null = 部分选中（选了至少一条但没全选），白色勾选框里的那一横
                     // 就是「还差一些」的信号。
                     value: _selection.triStateOf(candidates),
-                    onChanged: (_) => _toggleSelectAll(),
+                    onChanged: (_) => _toggleSelectAll(rows),
                     // AppBar 底色是本 App 的页面底（浅色），不是主色 ——
                     // 未选中的方框用 outline 描边才看得见（onPrimary 在这儿是白线）。
                     side: BorderSide(
@@ -308,7 +309,18 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                           ref.read(selectedTagsProvider.notifier).toggle(tag),
                     ),
                   ),
-                if (recordsAsync.isLoading && rows.isEmpty)
+                // 错误态必须排在「空态」之前：库打不开 / 迁移失败时 rows 同样是空的，
+                // 落到空态就会显示「还没有任何记录」—— 与数据真的没了无法区分
+                // （见 VestigeErrorState 的说明，2026-10-27 审查 C-001）。
+                if (recordsAsync.hasError)
+                  SliverFillRemaining(
+                    hasScrollBody: false,
+                    child: VestigeErrorState(
+                      error: recordsAsync.error!,
+                      onRetry: () => ref.invalidate(recordsProvider),
+                    ),
+                  )
+                else if (recordsAsync.isLoading && rows.isEmpty)
                   const SliverFillRemaining(
                     hasScrollBody: false,
                     child: Center(child: CircularProgressIndicator()),
@@ -501,16 +513,20 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   ///
   /// 这个集合同样是 [RecordSelection.prune] 的依据（见 build），
   /// 所以勾选集永远是它的子集 —— 全选框的判据和实际能操作的集合不会脱节。
-  Set<String> get _selectableIds => <String>{
-    for (final row in ref.read(homeRowsProvider))
+  ///
+  /// 候选集由调用方把**本帧的 rows 传进来**（2026-10-27 审查 m-007）：原先是
+  /// `ref.read(homeRowsProvider)`，依赖「build 里已经 watch 过、值已就绪」这条
+  /// 隐式时序 —— 读得太早就会拿到上一帧或空集。
+  Set<String> _selectableIdsOf(List<HomeRow> rows) => <String>{
+    for (final row in rows)
       if (row is RecordRow) row.record.id,
   };
 
   /// 全选 / 全不选（同一按钮来回切，AppBar 上只占一个位置）。
   ///
   /// 「全不选」只清勾选、不关多选态 —— 理由见 [RecordSelection.toggleAll]。
-  void _toggleSelectAll() =>
-      setState(() => _selection.toggleAll(_selectableIds));
+  void _toggleSelectAll(List<HomeRow> rows) =>
+      setState(() => _selection.toggleAll(_selectableIdsOf(rows)));
 
   /// 退出多选态（显式出口）：关开关 + 清勾选，两件事一起做。
   ///
@@ -577,9 +593,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
   /// 显示一条**带「撤销」**的提示（可撤销的操作都用它）。
   ///
-  /// 撤销的是历史里**最新那一步**，也就是刚做的那一步。之所以不精确传递条目 id：
-  /// 每条提示都会先把上一条收掉（`hideCurrentSnackBar`），
-  /// 所以屏幕上这条永远对应最新的一步，不会指错。
+  /// 撤销的目标是**这次操作刚刚写下的那条 undo 记录**（`lastUndoEntryId`），
+  /// 不是「历史里最新的一步」。这两者在多数时候相同，但有一个致命的分歧：
+  /// 当操作本身没有产生历史条目时（快照为空 —— 例如硬删除一批已不存在的 id），
+  /// 「退最新一步」会退掉**上一个不相关的操作**（2026-10-27 审查 M-007）。
+  /// 所以这里先问一句「刚才真的记下历史了吗」，没记就退化成普通提示。
   ///
   /// 时长 3 秒：够看清、够反应过来，又不占着屏幕碍事。
   /// **敢给这么短是因为有兜底** —— 撤销历史保留最近 20 步且不过期，
@@ -590,6 +608,12 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   /// 上面那 3 秒会被完全忽略（见 material/snack_bar.dart 里 persist 的文档）。
   /// 加了这个 action 就必须同时显式关掉 persist，否则提示会一直挂在屏幕上。
   void _toastUndoable(String message) {
+    final entryId = ref.read(recordActionsProvider).lastUndoEntryId;
+    if (entryId == null) {
+      // 没有可回退的条目：不挂按钮，避免点了却退掉别的操作。
+      _toast(message);
+      return;
+    }
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(
@@ -609,21 +633,21 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           ),
           duration: const Duration(seconds: 3),
           persist: false,
-          action: SnackBarAction(label: '撤销', onPressed: _undoLatest),
+          action: SnackBarAction(
+            label: '撤销',
+            onPressed: () => _undoEntry(entryId),
+          ),
         ),
       );
   }
 
-  /// 撤销最近一步。
+  /// 撤销**指定的那一步**（以及比它更新的步骤，见 `undoUpTo` 的语义）。
   ///
   /// 同时收起提示：否则用户连点两次「撤销」，第二下会退到更早的一步 ——
   /// 那时屏幕上那条提示已经不描述那一步了，属于「撤销了意料之外的东西」。
-  Future<void> _undoLatest() async {
+  Future<void> _undoEntry(int entryId) async {
     final actions = ref.read(recordActionsProvider);
-    final history = await actions.recentUndo();
-    if (history.isEmpty || !mounted) return;
-
-    final restored = await actions.undoUpTo(history.first.id);
+    final restored = await actions.undoUpTo(entryId);
     if (!mounted) return;
     ScaffoldMessenger.of(context).hideCurrentSnackBar();
     _toast(restored == 0 ? '没有可回滚的内容' : '已撤销，$restored 条记录回到操作前');
@@ -940,7 +964,10 @@ class _QuickNoteButton extends ConsumerWidget {
 
   /// 直接记一条今天的记录，并给一次撤销机会。
   Future<void> _quickAdd(BuildContext context, WidgetRef ref) async {
-    await ref
+    // 记住**这一条**的 id（2026-10-27 审查 C-003）：原先是撤销时反查
+    // 「业务日期=今天 且 createdAt 最大」的那条，插入还没回流、或当天另存过记录时
+    // 会删掉别的记录。id 是插入前就确定的，撤销因此不再需要推断。
+    final id = await ref
         .read(recordActionsProvider)
         .quickAddToday(content: quickNoteContent);
     if (!context.mounted) return;
@@ -967,19 +994,15 @@ class _QuickNoteButton extends ConsumerWidget {
           persist: false,
           action: SnackBarAction(
             label: '撤销',
-            onPressed: () => _undoQuickAdd(ref),
+            onPressed: () => _undoQuickAdd(ref, id),
           ),
         ),
       );
   }
 
-  /// 撤销刚插入的那条：找业务日期是今天、且最近入库的一条，软删掉。
-  Future<void> _undoQuickAdd(WidgetRef ref) async {
-    final records = ref.read(recordsProvider).valueOrNull ?? const [];
-    final candidates = records.where((r) => r.isRecordedToday()).toList()
-      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
-    if (candidates.isEmpty) return;
-    await ref.read(recordActionsProvider).deleteRecord(candidates.first.id);
+  /// 撤销刚插入的那一条（按 id 精确软删）。
+  Future<void> _undoQuickAdd(WidgetRef ref, String id) async {
+    await ref.read(recordActionsProvider).deleteRecord(id);
   }
 }
 
@@ -1003,12 +1026,22 @@ class _TimerButtonState extends ConsumerState<_TimerButton> {
   Timer? _ticker;
 
   @override
+  void initState() {
+    super.initState();
+    // 首次对齐放在 initState，而不是 build（2026-10-27 审查 m-008）：
+    // build 是幂等的渲染函数，在里面创建/取消 Timer 属于副作用，一旦哪天
+    // build 被更频繁地调用（例如主题变化），ticker 会被反复重开。
+    _syncTicker(ref.read(durationTimerProvider) != null);
+  }
+
+  @override
   void dispose() {
     _ticker?.cancel();
     super.dispose();
   }
 
-  void _ensureTicker(bool running) {
+  /// 计时状态变化时对齐秒级 tick 的生命周期（开始 → 建；结束/放弃 → 撤）。
+  void _syncTicker(bool running) {
     if (running && _ticker == null) {
       _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
         if (mounted) setState(() {});
@@ -1069,10 +1102,12 @@ class _TimerButtonState extends ConsumerState<_TimerButton> {
 
   @override
   Widget build(BuildContext context) {
+    // 计时开/停（含从别的页面回来、被放弃）都走这里对齐 ticker。
+    ref.listen<DateTime?>(durationTimerProvider, (_, next) {
+      _syncTicker(next != null);
+    });
     final startedAt = ref.watch(durationTimerProvider);
     final running = startedAt != null;
-    // build 时对齐 tick 生命周期（计时跨页面回来、被放弃等情况）。
-    _ensureTicker(running);
 
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
@@ -1727,8 +1762,11 @@ class _EmptyState extends StatelessWidget {
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text(
+                    // 文案必须指向**现在真实存在**的入口（2026-10-27 审查 m-001）：
+                    // 「长按 + 」那个手势 2026-09-28 已随 FAB 长按方案一起移除，
+                    // 原文案会让用户对着按钮长按、然后以为功能坏了。
                     '长按卡片可多选、整体调整日期；'
-                    '长按「+」= 立刻记一条今天的。',
+                    '点 FAB 上方的闪电图标 = 立刻记一条今天的。',
                     style: theme.textTheme.labelMedium?.copyWith(
                       color: scheme.onSurfaceVariant,
                       height: 1.55,

@@ -137,8 +137,10 @@ class CsvUtil {
         return row[idx].trim();
       }
 
-      final content = cell('CONTENT', fallback: headIndex == null ? 2 : null);
-      final title = cell('TITLE', fallback: headIndex == null ? 1 : null);
+      final content =
+          _stripFormulaGuard(cell('CONTENT', fallback: headIndex == null ? 2 : null));
+      final title =
+          _stripFormulaGuard(cell('TITLE', fallback: headIndex == null ? 1 : null));
       final rawId = cell('ID', fallback: headIndex == null ? 0 : null);
 
       // 时间：优先 RecordedAt，其次 CreatedAt（兼容旧格式），最后退回现在。
@@ -186,7 +188,7 @@ class CsvUtil {
 
       records.add(
         RecordEntity(
-          id: rawId.isEmpty ? const Uuid().v4() : rawId,
+          id: _sanitizeId(rawId),
           title: title.isEmpty ? null : title,
           content: content,
           tags: tags,
@@ -208,9 +210,60 @@ class CsvUtil {
 
   // ── 内部实现 ────────────────────────────────────────────────────────
 
+  /// 允许出现在 id（= 数据库主键 = 路由参数）里的字符集。
+  ///
+  /// 为什么必须收紧（2026-10-27 审查 M-004）：导入把 CSV 的 ID 列原样当主键，
+  /// 而这个 id 之后会进两条路径 ——
+  /// - **URL 路径**（`/edit/<id>`）：含 `/` `?` `#` 会让路由匹配失败，记录点不开；
+  /// - **「新建」保留字**：编辑页用 `new` / `new@...` 表示尚未落库的新记录，
+  ///   一条 id 恰好是 `new` 的记录会被当成新建入口，用户点它等于又记了一条。
+  ///
+  /// 不合规的 id 一律**重新生成 UUID**（而不是丢弃整行）：ID 只是幂等导入的锚点，
+  /// 换一个代价是可预期的（这一行会作为新记录插入），丢一行则是数据损失。
+  static final RegExp _safeIdPattern = RegExp(r'^[A-Za-z0-9_-]{1,64}$');
+
+  /// 编辑页里表示「新建」的保留前缀（见 `edit_record_provider.kNewRecordId`）。
+  static const String _reservedNewId = 'new';
+
+  static String _sanitizeId(String raw) {
+    final id = raw.trim();
+    if (id.isEmpty) return const Uuid().v4();
+    if (!_safeIdPattern.hasMatch(id)) return const Uuid().v4();
+    if (id == _reservedNewId || id.startsWith('$_reservedNewId@')) {
+      return const Uuid().v4();
+    }
+    return id;
+  }
+
+  /// 首行是否像表头：必须命中**至少两个**已知列名。
+  ///
+  /// 只判「含 ID 或 CONTENT」会把数据行吃掉（2026-10-27 审查 m-003）：
+  /// 无表头文件的正文里出现英文 `id` / `content` 时，那一行会被当表头跳过，
+  /// 而且列序也被重排。要求两个列名同时命中，误判概率降到可忽略。
   static bool _looksLikeHeader(List<String> row) {
-    final keys = row.map(_normalizeKey).toSet();
-    return keys.contains('ID') || keys.contains('CONTENT');
+    const known = <String>{
+      'ID',
+      'TITLE',
+      'CONTENT',
+      'TAGS',
+      'RECORDEDAT',
+      'CREATEDAT',
+      'UPDATEDAT',
+      'DURATIONSEC',
+      'DURATIONMIN',
+      'DATE',
+      'CREATETIME',
+      'UPDATETIME',
+      'UPDATEDDATE',
+    };
+    var hits = 0;
+    for (final cell in row) {
+      if (known.contains(_normalizeKey(cell))) {
+        hits++;
+        if (hits >= 2) return true;
+      }
+    }
+    return false;
   }
 
   static Map<String, int> _indexHeader(List<String> row) {
@@ -242,14 +295,36 @@ class CsvUtil {
     return parsed?.toLocal();
   }
 
+  /// 会被表格软件（Excel / Numbers / LibreOffice）识别成**公式**的首字符。
+  ///
+  /// 导出时见到这些字符必须中和（2026-10-27 审查 M-009）：CSV 是拿去 Excel 打开的，
+  /// 一个以 `=` 开头的正文在那边会被求值（`=HYPERLINK(...)`、`=cmd|...`），
+  /// 而本 App 的导出默认走系统分享 —— 文件是会被发出去的。
+  static const String _formulaPrefixes = '=+-@\t\r';
+
+  /// 中和公式风险：前置单引号（表格软件的「按文本处理」约定）。
+  static String _guardFormula(String value) =>
+      value.isNotEmpty && _formulaPrefixes.contains(value[0])
+          ? "'$value"
+          : value;
+
+  /// 导入时还原 [guardFormula] 加上的单引号 —— 保证「导出 → 导入」内容不变。
+  static String _stripFormulaGuard(String value) =>
+      value.length >= 2 &&
+              value[0] == "'" &&
+              _formulaPrefixes.contains(value[1])
+          ? value.substring(1)
+          : value;
+
   static String _escape(String value) {
-    if (value.contains(',') ||
-        value.contains('"') ||
-        value.contains('\n') ||
-        value.contains('\r')) {
-      return '"${value.replaceAll('"', '""')}"';
+    final guarded = _guardFormula(value);
+    if (guarded.contains(',') ||
+        guarded.contains('"') ||
+        guarded.contains('\n') ||
+        guarded.contains('\r')) {
+      return '"${guarded.replaceAll('"', '""')}"';
     }
-    return value;
+    return guarded;
   }
 
   /// 支持引号包裹、双写转义引号、引号内换行、CRLF / LF / CR。

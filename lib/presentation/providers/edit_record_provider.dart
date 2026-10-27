@@ -84,6 +84,14 @@ class EditRecordController
   EditRecordState get _current =>
       state.valueOrNull ?? EditRecordState.newRecord(id: _uuid.v4());
 
+  /// 最近一次失败的说明（没有错时为 null）。
+  ///
+  /// 给页面用：`save()` 只回 bool，「失败」既可能是内容为空、也可能是写库异常，
+  /// 页面需要能读到具体原因才不会一律提示「内容不能为空」（审查 M-002）。
+  /// 这里转出而不是让页面直接读 `state` —— `AsyncNotifier.state` 是受保护成员，
+  /// 外部访问会被 lint 拦下（invalid_use_of_protected_member）。
+  String? get lastError => state.valueOrNull?.error;
+
   void _update(EditRecordState Function(EditRecordState s) transform) {
     state = AsyncData(transform(_current));
   }

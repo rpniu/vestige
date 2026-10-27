@@ -18,6 +18,14 @@ final durationTimerProvider =
 class DurationTimerNotifier extends Notifier<DateTime?> {
   static const String _prefsKey = 'duration_timer_start_ms';
 
+  /// 单次计时的上界（24 小时）。
+  ///
+  /// 计时起点是持久化的（杀进程也照走），于是「开了计时忘了关、隔几天再打开」
+  /// 会得到一个几百小时的时长：既不是真实投入，也会把编辑页的「时」轮与统计卡的
+  /// 数字顶到很夸张的位置（2026-10-27 审查 M-003）。
+  /// 超过上界一律按脏数据处理 —— 恢复时丢弃，结算时夹到上界。
+  static const Duration maxSessionDuration = Duration(hours: 24);
+
   @override
   DateTime? build() {
     // prefs 拿不到时静默降级成「不持久化的内存计时」：计时是个锦上添花的
@@ -31,7 +39,13 @@ class DurationTimerNotifier extends Notifier<DateTime?> {
     final ms = prefs.getInt(_prefsKey);
     // 只在时长合理时恢复：时钟回拨/手工改存储到未来时刻的脏数据直接丢弃。
     if (ms == null || ms > DateTime.now().millisecondsSinceEpoch) return null;
-    return DateTime.fromMillisecondsSinceEpoch(ms);
+    final startedAt = DateTime.fromMillisecondsSinceEpoch(ms);
+    if (DateTime.now().difference(startedAt) > maxSessionDuration) {
+      // 超期同样当脏数据：顺手清掉存储（写完即忘 —— 清不掉也只是下次再清一次）。
+      unawaited(_persist((prefs) => prefs.remove(_prefsKey)));
+      return null;
+    }
+    return startedAt;
   }
 
   /// 开始计时（已在计时时幂等 —— 不重置起点）。
@@ -46,15 +60,17 @@ class DurationTimerNotifier extends Notifier<DateTime?> {
   }
 
   /// 停止并结算：返回经过的**秒数**（至少 1 秒 —— 计了不到 1 秒也记 1 秒，
-  /// 0 秒没有记录价值）。成功后计时结束、存储清空。
+  /// 0 秒没有记录价值）。超过 [maxSessionDuration] 的按上界结算。
+  /// 成功后计时结束、存储清空。
   Future<int> stop() async {
     final startedAt = state;
     if (startedAt == null) return 0;
     final elapsed = DateTime.now().difference(startedAt);
     state = null;
     await _persist((prefs) => prefs.remove(_prefsKey));
-    final seconds = elapsed.inSeconds < 1 ? 1 : elapsed.inSeconds;
-    return seconds;
+    final raw = elapsed.inSeconds < 1 ? 1 : elapsed.inSeconds;
+    final max = maxSessionDuration.inSeconds;
+    return raw > max ? max : raw;
   }
 
   /// 放弃本次计时（不结算）。

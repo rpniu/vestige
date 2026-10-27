@@ -1,4 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:uuid/uuid.dart';
 import 'package:vestige/data/database/app_database.dart';
 import 'package:vestige/data/repositories/record_repository.dart';
 import 'package:vestige/domain/calendar_util.dart';
@@ -475,24 +476,30 @@ class RecordActions {
 
   final RecordRepository _repo;
 
+  /// 最近一次可撤销操作**实际写下的** undo 条目 id。
+  ///
+  /// 为什么需要它（2026-10-27 审查 M-007）：快照为空时 `pushUndo` 不记历史，
+  /// 而 UI 的「撤销」按钮原先是「回退历史里最新的一步」—— 那种情况下会退掉
+  /// **上一个不相关的操作**。有了这个值，UI 可以先问「刚才真的记下了吗」，
+  /// 并按 id 精确回退。
+  ///
+  /// null = 最近一次操作没有产生可回退的历史。
+  int? lastUndoEntryId;
+
   /// 立刻记一笔「今天」——首页一键记录用。
   /// [content] 缺省 `1`，沿用原 App「敲一下就是一次」的习惯。
-  Future<void> quickAddToday({String content = '1', DateTime? now}) =>
-      _repo.addRecord(content: content, recordedAt: now ?? DateTime.now());
-
-  /// 补记：把一条记录挂到指定日期上（时间部分取该日期起点，或传入时刻）。
-  Future<void> backfill({
-    required String content,
-    required DateTime recordedDay,
-    String? title,
-    List<String> tags = const [],
-  }) =>
-      _repo.addRecord(
-        content: content,
-        title: title,
-        tags: tags,
-        recordedAt: recordedDay,
-      );
+  ///
+  /// 返回新记录的 id（2026-10-27 审查 C-003）：调用方（速记）据此精确撤销，
+  /// 不必再靠「今天 + 最近入库」反查。id 在插入前生成，落库与返回必然是同一行。
+  Future<String> quickAddToday({String content = '1', DateTime? now}) async {
+    final id = const Uuid().v4();
+    await _repo.addRecord(
+      id: id,
+      content: content,
+      recordedAt: now ?? DateTime.now(),
+    );
+    return id;
+  }
 
   // ── 可撤销的写操作 ──────────────────────────────────────────────────
   //
@@ -512,11 +519,16 @@ class RecordActions {
       _undoable('彻底删除', ids, () => _repo.hardDeleteRecords(ids));
 
   Future<int> emptyTrash() async {
-    // 清空回收站没有 id 参数，快照要自己取（整个回收站）
-    final before = await _repo.getDeletedRecords();
-    final count = await _repo.emptyTrash();
-    await _repo.pushUndo('清空回收站', before);
-    return count;
+    lastUndoEntryId = null;
+    // 清空回收站没有 id 参数，快照要自己取（整个回收站）。
+    // 快照读取、清空、写历史三步放进同一事务（2026-10-27 审查 M-006）：
+    // 否则「已清空但历史没写进去」会让这次操作永久不可撤销。
+    return _repo.transaction(() async {
+      final before = await _repo.getDeletedRecords();
+      final count = await _repo.emptyTrash();
+      lastUndoEntryId = await _repo.pushUndo('清空回收站', before);
+      return count;
+    });
   }
 
   /// 把选中记录整体前移/后移一天（多选补记的批量修正）。
@@ -536,7 +548,7 @@ class RecordActions {
         '批量改标签',
         ids,
         () => _repo.applyTags(ids, add: add, remove: remove),
-        // 一条都没改动时不记历史：留一条「撤销了也没有变化」的条目只会干扰列表
+        // 一条都没改动时不记历史（见 _undoable 里的同一条说明）
         shouldKeep: (int changed) => changed > 0,
       );
 
@@ -544,18 +556,25 @@ class RecordActions {
   ///
   /// 快照必须在 `action()` **之前**取 —— 操作跑完再取，拿到的就已经是
   /// 「改完之后的状态」，撤销等于没撤。
+  ///
+  /// 三步（读快照 → 执行 → 写历史）包在**同一个事务**里（2026-10-27 审查 M-006）：
+  /// 原先各自独立提交，「数据已改、历史没写」的中间态会让这次操作永久不可撤销。
   Future<T> _undoable<T>(
     String label,
     List<String> ids,
     Future<T> Function() action, {
     bool Function(T result)? shouldKeep,
   }) async {
-    final before = await _repo.getRecordsByIds(ids);
-    final result = await action();
-    if (shouldKeep == null || shouldKeep(result)) {
-      await _repo.pushUndo(label, before);
-    }
-    return result;
+    lastUndoEntryId = null;
+    return _repo.transaction(() async {
+      final before = await _repo.getRecordsByIds(ids);
+      final result = await action();
+      // 一条都没改动时不记历史：留一条「撤销了也没有变化」的条目只会干扰列表
+      if (shouldKeep == null || shouldKeep(result)) {
+        lastUndoEntryId = await _repo.pushUndo(label, before);
+      }
+      return result;
+    });
   }
 
   // ── 撤销 ────────────────────────────────────────────────────────────
@@ -581,8 +600,21 @@ class RecordActions {
 
   /// 落库已解析好的记录（导入用）。解析在 `domain/csv_util.dart`，
   /// UI 可以先解析、预览给用户确认，再调用这里写入。
-  Future<int> importRecords(List<RecordEntity> records) =>
-      _repo.upsertRecords(records);
+  ///
+  /// **导入是可撤销的**（2026-10-27 审查 C-002）：同 id 的行会整行覆盖既有记录，
+  /// 这是本 App 唯一「既破坏又批量」的入口，没有快照就等于给用户留了一个
+  /// 无法挽回的坑。快照按「将被覆盖的那些 id」取，动作与写历史同事务。
+  Future<int> importRecords(List<RecordEntity> records) async {
+    lastUndoEntryId = null;
+    if (records.isEmpty) return 0;
+    final ids = <String>[for (final r in records) r.id];
+    return _repo.transaction(() async {
+      final before = await _repo.getRecordsByIds(ids);
+      final count = await _repo.upsertRecords(records);
+      lastUndoEntryId = await _repo.pushUndo('CSV 导入', before);
+      return count;
+    });
+  }
 }
 
 // ── 视图模型 ──────────────────────────────────────────────────────────
