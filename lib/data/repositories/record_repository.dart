@@ -273,6 +273,11 @@ class RecordRepository {
         records.map(_toCompanion).toList(),
       );
 
+  /// 把 CSV 解析出的实体转成写入用的 companion。
+  ///
+  /// `deletedAt` 必须一起写：导入行的 `deleted` 恒为 false（CSV 不含回收站内容），
+  /// 若让库里的旧值留着，就会出现「未删除却带着删除时刻」的行 ——
+  /// 与 `restore()` 维持的不变式冲突，后续任何按 `deletedAt` 的判断都会错。
   RecordsCompanion _toCompanion(RecordEntity r) => RecordsCompanion(
         id: Value(r.id),
         title: Value(r.title),
@@ -282,6 +287,7 @@ class RecordRepository {
         createdAt: Value(r.createdAt),
         updatedAt: Value(r.updatedAt),
         deleted: Value(r.deleted),
+        deletedAt: Value(r.deletedAt),
         durationS: Value(r.durationS),
       );
 

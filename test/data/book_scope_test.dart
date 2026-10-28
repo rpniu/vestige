@@ -20,6 +20,7 @@ import 'package:vestige/data/database/app_database.dart';
 import 'package:vestige/data/database/book_dao.dart';
 import 'package:vestige/data/database/record_dao.dart';
 import 'package:vestige/data/repositories/record_repository.dart';
+import 'package:vestige/domain/csv_util.dart';
 import 'package:vestige/domain/record_book.dart';
 
 void main() {
@@ -86,6 +87,60 @@ void main() {
         (await repoOf(work.id).getDeletedRecords()).map((r) => r.content),
         <String>['工作'],
       );
+    });
+  });
+
+  group('导入不跨本搬运（2026-10-28 审查 C-001）', () {
+    test('把 A 本的记录导入 B 本：A 本原样保留，B 本多一条新 id 的副本', () async {
+      final work = await books.create('工作');
+      final mine = repoOf(kDefaultBookId);
+      final theirs = repoOf(work.id);
+
+      await mine.addRecord(content: '默认本里的原始记录', id: 'shared-id');
+      // 模拟：从默认本导出 CSV，切到工作本导入
+      final exported = await mine.getAllActiveRecordsSync();
+      await theirs.upsertRecords(exported);
+
+      // 源记录本不能被搬空（修复前这两条断言都会失败）
+      final inMine = await mine.getAllActiveRecordsSync();
+      expect(inMine, hasLength(1));
+      expect(inMine.single.id, 'shared-id');
+
+      // 当前本拿到的是副本：内容相同、id 必须换新（否则就是同一个主键抢归属）
+      final inTheirs = await theirs.getAllActiveRecordsSync();
+      expect(inTheirs, hasLength(1));
+      expect(inTheirs.single.content, '默认本里的原始记录');
+      expect(inTheirs.single.id, isNot('shared-id'));
+    });
+
+    test('同一记录本内重复导入仍然按 id 覆盖（幂等锚点不受影响）', () async {
+      final mine = repoOf(kDefaultBookId);
+      await mine.addRecord(content: '第一版', id: 'r1');
+
+      final bumped = (await mine.getAllActiveRecordsSync())
+          .single
+          .copyWith(content: '第二版');
+      await mine.upsertRecords(<RecordEntity>[bumped]);
+
+      final all = await mine.getAllActiveRecordsSync();
+      expect(all, hasLength(1), reason: '同本同 id 是覆盖，不是新增');
+      expect(all.single.content, '第二版');
+    });
+
+    test('导入会把库里残留的删除时刻清掉（未删除的行不该带 deletedAt）', () async {
+      final mine = repoOf(kDefaultBookId);
+      await mine.addRecord(content: '一条', id: 'r1');
+      await mine.deleteRecord('r1'); // 先进回收站，deleted_at 有值
+      expect((await mine.getDeletedRecords()).single.deletedAt, isNotNull);
+
+      // 从 CSV 导入同一 id 的版本：解析结果里 deleted=false、deletedAt=null。
+      // 修复前 companion 不带 deletedAt，库里那个旧的删除时刻会留下来。
+      final csv = 'r1,,一条,,1759300000000,1759300000000,1759300000000,\n';
+      await mine.upsertRecords(CsvUtil.parse(csv).records);
+
+      final row = (await mine.getAllActiveRecordsSync()).single;
+      expect(row.deleted, isFalse);
+      expect(row.deletedAt, isNull, reason: '未删除的行不能留着删除时刻');
     });
   });
 

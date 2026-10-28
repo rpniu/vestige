@@ -1,4 +1,5 @@
 import 'package:drift/drift.dart';
+import 'package:uuid/uuid.dart';
 import 'package:vestige/domain/record_book.dart';
 
 import 'app_database.dart';
@@ -73,13 +74,52 @@ class RecordDao extends DatabaseAccessor<VestigeDatabase>
   }
 
   /// 批量 upsert（CSV 导入用）：同 id 覆盖，新 id 插入。单事务执行。
+  ///
+  /// ## 跨记录本的 id 冲突必须先避开（2026-10-28 审查 C-001）
+  /// `insertAllOnConflictUpdate` 生成的是 `ON CONFLICT(id) DO UPDATE SET ...`，
+  /// 而 SET 列表里**包含 `book_id`** —— `id` 是全局主键，记录本只是它的一个列。
+  /// 于是「把 A 本导出的 CSV 导入 B 本」会把 A 本的那些行**改判**给 B 本：
+  /// A 本当场少记录、B 本多出来，而界面只有一句「已导入 N 条」。
+  /// 更糟的是撤销救不回来 —— 导入的快照按**当前本**的 id 取
+  /// （`RecordRepository.getRecordsByIds` 带 `_inBook`），被改判的行不在其中。
+  ///
+  /// 所以这里先把「已存在于**其它**记录本」的 id 换成新的 uuid，
+  /// 让它们作为当前本的新记录插入。语义上也更正确：导入是「把这些内容拿进来」，
+  /// 不是「把它们从别处夺过来」。
   Future<int> upsertAll(List<RecordsCompanion> entries) async {
     if (entries.isEmpty) return 0;
     final scoped = <RecordsCompanion>[
-      for (final e in entries) e.copyWith(bookId: Value(bookId)),
+      for (final e in await _reassignForeignIds(entries))
+        e.copyWith(bookId: Value(bookId)),
     ];
     await batch((b) => b.insertAllOnConflictUpdate(records, scoped));
-    return entries.length;
+    return scoped.length;
+  }
+
+  /// 把「id 已被别的记录本占用」的条目换成新 id（[upsertAll] 的前置步骤）。
+  ///
+  /// 这里**故意不带 [_inBook]**：要查的正是「别的本里已经占用了这个 id」的行。
+  /// 查询只取冲突的那几行，量级等于导入文件里撞 id 的行数。
+  Future<List<RecordsCompanion>> _reassignForeignIds(
+    List<RecordsCompanion> entries,
+  ) async {
+    final ids = <String>[
+      for (final e in entries)
+        if (e.id.present) e.id.value,
+    ];
+    if (ids.isEmpty) return entries;
+    final foreign = await (select(records)
+          ..where((r) => r.id.isIn(ids) & r.bookId.equals(bookId).not()))
+        .get();
+    if (foreign.isEmpty) return entries;
+    final taken = <String>{for (final r in foreign) r.id};
+    return <RecordsCompanion>[
+      for (final e in entries)
+        if (e.id.present && taken.contains(e.id.value))
+          e.copyWith(id: Value(const Uuid().v4()))
+        else
+          e,
+    ];
   }
 
   /// 软删除单条：打上 `deleted`，并**记下进回收站的时刻**（回收站保留期要用）。
