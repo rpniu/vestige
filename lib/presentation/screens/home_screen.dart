@@ -1205,10 +1205,14 @@ class _TimerButtonState extends ConsumerState<_TimerButton> {
     if (choice == null || !mounted) return;
 
     if (!choice) {
-      // 放弃：不结算
-      await notifier.cancel();
-      if (!mounted) return;
-      ScaffoldMessenger.of(context)
+      // 放弃：不结算。
+      // 提示必须**先取 messenger 再 cancel**：cancel() 一置 state = null，
+      // 计时胶囊（连同本 widget）立刻被卸载，之后 `ScaffoldMessenger.of(context)`
+      // 会拿不到（`mounted` 也是 false）—— 与「停止并记录」丢跳转同一个竞态。
+      // messenger 归首页的 Scaffold 管，widget 被卸载不影响它把提示弹出来。
+      final ScaffoldMessengerState messenger = ScaffoldMessenger.of(context);
+      unawaited(notifier.cancel());
+      messenger
         ..hideCurrentSnackBar()
         ..showSnackBar(
           const SnackBar(
@@ -1220,18 +1224,6 @@ class _TimerButtonState extends ConsumerState<_TimerButton> {
       return;
     }
 
-    // 停止并记录：先结算秒数、**同步**把编辑页推出去，再在后台清计时状态。
-    //
-    // 顺序不能反过来（2026-10-28 定位的缺陷）：`stop()` 一置 `state = null`，
-    // 首页立即 rebuild，计时胶囊（连同本 widget）被整棵卸载；await 写盘回来后
-    // `mounted` 已是 false，下面那句 `if (!mounted) return` 会把这次跳转整个吞掉 ——
-    // 表现为「计时消失、人留在首页」，且是否触发取决于写盘与下一帧的赛跑。
-    // 停止并记录：先结算秒数、**同步**把编辑页推出去，再在后台清计时状态。
-    //
-    // 顺序不能反过来（2026-10-28 定位的缺陷）：`stop()` 一置 `state = null`，
-    // 首页立即 rebuild，计时胶囊（连同本 widget）被整棵卸载；await 写盘回来后
-    // `mounted` 已是 false，下面那句 `if (!mounted) return` 会把这次跳转整个吞掉 ——
-    // 表现为「计时消失、人留在首页」，且是否触发取决于写盘与下一帧的赛跑。
     // 停止并记录：先结算秒数、**同步**把编辑页推出去，再在后台清计时状态。
     //
     // 顺序不能反过来（2026-10-28 定位的缺陷）：`stop()` 一置 `state = null`，
