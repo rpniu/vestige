@@ -99,6 +99,17 @@ void main() {
       final csv = CsvUtil.export(<RecordEntity>[record(content: '正常内容')]);
       expect(csv, isNot(contains("'正常内容")));
     });
+
+    test('标签列同样无损往返（2026-10-28：导入漏了还原这一步）', () {
+      // 标签列是整串拼接后再中和的，所以第一个标签以 = 开头时整串都被加了引号；
+      // 导入侧原先只对正文/标题还原，标签会多出一个前导单引号。
+      final original = record(tags: <String>['=实验', '读书']);
+      final csv = CsvUtil.export(<RecordEntity>[original]);
+      expect(csv, contains("'=实验;读书"), reason: '导出侧确实中和了');
+
+      final back = CsvUtil.parse(csv).records.single;
+      expect(back.tags, <String>['=实验', '读书'], reason: '导入必须原样还原');
+    });
   });
 
   group('[m-003] 表头识别', () {

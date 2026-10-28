@@ -184,7 +184,9 @@ class CsvUtil {
         continue;
       }
 
-      final tags = cell('TAGS', fallback: headIndex == null ? 3 : null)
+      final tags = _stripFormulaGuard(
+        cell('TAGS', fallback: headIndex == null ? 3 : null),
+      )
           .split(tagSeparator)
           .map((e) => e.trim())
           .where((e) => e.isNotEmpty)
@@ -313,7 +315,10 @@ class CsvUtil {
           ? "'$value"
           : value;
 
-  /// 导入时还原 [guardFormula] 加上的单引号 —— 保证「导出 → 导入」内容不变。
+  /// 导入时还原 [_guardFormula] 加上的单引号 —— 保证「导出 → 导入」内容不变。
+  ///
+  /// 正文、标题、标签三列都要过这一步：导出侧的中和是**逐列**做的
+  /// （标签列是整串拼接后再中和），漏掉任何一列，往返一次就会多出一个前导 `'`。
   static String _stripFormulaGuard(String value) =>
       value.length >= 2 &&
               value[0] == "'" &&
