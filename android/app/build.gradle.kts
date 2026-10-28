@@ -63,7 +63,7 @@ android {
                 signingConfigs.getByName("debug")
             }
             // 保持 Flutter 模板默认：不开 R8 混淆/资源压缩。
-            // 以后想开，需要给插件（drift / share_plus / file_selector 等）补 keep 规则再打开。
+            // 以后想开，需要给插件（drift / flutter_file_dialog / file_selector 等）补 keep 规则再打开。
             isMinifyEnabled = false
             isShrinkResources = false
         }

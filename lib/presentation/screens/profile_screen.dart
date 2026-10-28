@@ -1,8 +1,11 @@
+import 'dart:convert';
+
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_file_dialog/flutter_file_dialog.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:share_plus/share_plus.dart';
 import 'package:vestige/app/motion.dart';
 import 'package:vestige/app/router.dart';
 import 'package:vestige/app/theme.dart';
@@ -17,12 +20,16 @@ import 'package:vestige/presentation/services/csv_file.dart';
 
 /// 我的：主题、数据管理（CSV 文件导入 / 导出）、关于。
 ///
-/// 数据管理一律走**真实文件**（`file_selector`）：
-/// - 导出：桌面端弹原生「另存为」；Android / iOS 落临时文件交给系统分享。
+/// 数据管理一律走**真实文件**：
+/// - 导出：桌面端用 `file_selector` 弹原生「另存为」；Android / iOS 用
+///   `flutter_file_dialog` 弹系统保存界面（SAF「保存到」/ iOS「存储到文件」），
+///   由用户选定位置后由插件写盘。两条路都不经过系统分享。
 /// - 导入：选一个 .csv 文件 → 解析 → 把结果（条数 / 补记条数 / 跳过的坏行）
 ///   摊开给用户确认 → 再写库。避免选错文件就直接改数据。
 ///
 /// 2026-10-27：Web 目标已移除，原先为它保留的「分享文本 / 下载」分支一并删掉。
+/// 2026-10-28：移动端原本回落到 `share_plus` 分享面板，改为系统保存对话框 ——
+/// 导出是「把文件存到我的设备上」，不是「发给别人」。
 class ProfileScreen extends ConsumerStatefulWidget {
   const ProfileScreen({super.key});
 
@@ -157,7 +164,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                 _ActionTile(
                   icon: Icons.file_download_outlined,
                   title: '导出 CSV 文件',
-                  subtitle: '选择保存位置，或分享给别人',
+                  subtitle: '选择保存位置，存进设备的文件管理器',
                   enabled: !_busy,
                   onTap: _exportCsv,
                 ),
@@ -231,29 +238,35 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
       final fileName =
           'vestige_export_${DateTime.now().millisecondsSinceEpoch}.csv';
 
-      // 1) 桌面端等支持另存为的平台：弹原生保存对话框
+      // 1) 桌面端：file_selector 的原生「另存为」
       final path = await _pickSavePath(fileName);
-      if (path == _cancelled) return; // 用户取消，不再弹分享面板
+      if (path == _cancelled) return; // 用户取消
       if (path != null) {
         final ok = await writeCsvToPath(path, csv);
         if (mounted) _toast(ok ? '已导出到 $path' : '写入文件失败：$path');
         return;
       }
 
-      // 2) 移动端（Android / iOS 没有「另存为」）：临时文件 + 系统分享
-      final tempPath = await writeTempCsv(csv, fileName);
-      final shared = tempPath == null
-          ? await _tryShare(ShareParams(text: csv, subject: 'Vestige 数据导出'))
-          : await _tryShare(
-              ShareParams(
-                files: <XFile>[XFile(tempPath, mimeType: 'text/csv')],
-                subject: 'Vestige 数据导出',
-                text: 'Vestige 记录备份（CSV）',
-              ),
-            );
-
+      // 2) 移动端：系统保存对话框（Android = SAF「保存到」，iOS = 存储到「文件」）。
+      //    直接传字节，插件在用户确认位置后写盘，不经过系统分享；取消返回 null。
+      final saved = await FlutterFileDialog.saveFile(
+        params: SaveFileDialogParams(
+          data: Uint8List.fromList(utf8.encode(csv)),
+          fileName: fileName,
+          mimeTypesFilter: const <String>['text/csv'],
+        ),
+      );
+      if (!mounted || saved == null) return; // 用户取消
+      _toast('已导出到 ${_readablePath(saved)}');
+    } on PlatformException catch (e) {
+      // activity_not_found：设备没有能承接 ACTION_CREATE_DOCUMENT 的
+      // 文件管理器（精简 ROM 上可能发生），此时告知用户比抛原始错误码有用。
       if (!mounted) return;
-      _toast(shared ? '已调起分享' : '当前平台不支持保存对话框与分享，导出未完成');
+      _toast(
+        e.code == 'activity_not_found'
+            ? '系统里没有可用的文件管理器，无法选择保存位置'
+            : '导出失败：${e.message ?? e.code}',
+      );
     } catch (e) {
       if (mounted) _toast('导出失败：$e');
     } finally {
@@ -261,12 +274,19 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     }
   }
 
+  /// Android 的保存对话框回的是 SAF document path（形如
+  /// `/document/primary:Download/x.csv`），去掉协议前缀才好读；
+  /// iOS 与桌面回的是真实绝对路径，原样显示。
+  String _readablePath(String raw) =>
+      raw.replaceFirst(RegExp(r'^/document/[^/:]*:'), '');
+
   /// 调起原生保存对话框。返回用户选定路径；
-  /// 返回 [_cancelled] = 用户取消；返回 null = 平台不支持（Android / iOS）。
+  /// 返回 [_cancelled] = 用户取消；返回 null = 平台没有该能力（Android / iOS），
+  /// 调用方应改走系统保存对话框。
   ///
   /// 只把「平台没实现」当作不支持（2026-10-27 审查 m-005）：权限不足、磁盘满这类
-  /// 真实故障必须上抛，否则会被静默当成「不支持另存为」而转去系统分享 ——
-  /// 用户看到「已调起分享」，却不知道真正想要的导出已经失败。
+  /// 真实故障必须上抛，否则会被静默当成「不支持另存为」而改走别路 ——
+  /// 用户会以为导出成功了，实际什么也没写。
   Future<String?> _pickSavePath(String suggestedName) async {
     try {
       final location = await getSaveLocation(
@@ -278,20 +298,9 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
       if (path == null || path.isEmpty) return _cancelled;
       return path;
     } on UnimplementedError {
-      return null; // Android / iOS 未实现另存为
+      return null; // file_selector 的 Android / iOS 实现没有另存为
     } on UnsupportedError {
       return null;
-    }
-  }
-
-  Future<bool> _tryShare(ShareParams params) async {
-    try {
-      await SharePlus.instance.share(params);
-      return true;
-    } on UnimplementedError {
-      return false;
-    } catch (_) {
-      return false;
     }
   }
 
