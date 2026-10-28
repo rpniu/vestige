@@ -32,6 +32,42 @@ String editRecordKey({
   return '$kNewRecordId@$day@$dur';
 }
 
+/// 解析 `new@yyyy-MM-dd[@dur]` 里的日期段：保留当前时刻，只换日期 ——
+/// 免得补记出来的记录一律显示 00:00。日期段后面可能还跟着时长段。
+DateTime? seededRecordedAt(String key) {
+  final at = key.indexOf('@');
+  if (at < 0) return null;
+  final rest = key.substring(at + 1);
+  final next = rest.indexOf('@');
+  final day = DateTime.tryParse(next < 0 ? rest : rest.substring(0, next));
+  if (day == null) return null;
+  final now = DateTime.now();
+  return DateTime(day.year, day.month, day.day, now.hour, now.minute, now.second);
+}
+
+/// 解析 key 第 3 段（`new@day@dur` 里的 dur，**秒**），不是合法正整数就当没给。
+int? seededDurationSec(String key) {
+  final first = key.indexOf('@');
+  if (first < 0) return null;
+  final second = key.indexOf('@', first + 1);
+  if (second < 0) return null;
+  final value = int.tryParse(key.substring(second + 1));
+  return value == null || value <= 0 ? null : value;
+}
+
+/// 按 family key 构造「新建」的初始状态。
+///
+/// provider 与页面**共用这一份**：provider 拿到的是权威状态（保存与改字段都走它），
+/// 页面在 provider 的异步值到达之前先用这里的结果渲染首帧 —— 新建记录没有任何
+/// IO，不该先闪一帧转圈。
+/// 两边各自生成 UUID，所以 id 不同；但保存落库用的是 controller 的 state，
+/// 页面这份临时 id 不会被写入。
+EditRecordState newRecordStateFromKey(String key) => EditRecordState.newRecord(
+      id: const Uuid().v4(),
+      recordedAt: seededRecordedAt(key),
+      durationSec: seededDurationSec(key),
+    );
+
 final editRecordProvider =
     AsyncNotifierProvider.autoDispose.family<EditRecordController, EditRecordState, String>(
   EditRecordController.new,
@@ -44,11 +80,7 @@ class EditRecordController
   @override
   Future<EditRecordState> build(String arg) async {
     if (arg == kNewRecordId || arg.startsWith('$kNewRecordId@')) {
-      return EditRecordState.newRecord(
-        id: _uuid.v4(),
-        recordedAt: _seededRecordedAt(arg),
-        durationSec: _seededDurationSec(arg),
-      );
+      return newRecordStateFromKey(arg);
     }
     final record = await ref.read(recordRepositoryProvider).getRecordById(arg);
     if (record == null) {
@@ -56,29 +88,6 @@ class EditRecordController
       return EditRecordState.newRecord(id: _uuid.v4());
     }
     return EditRecordState.fromEntity(record);
-  }
-
-  /// 解析 `new@yyyy-MM-dd[@dur]`：保留当前时刻，只换日期 ——
-  /// 免得补记出来的记录一律显示 00:00。日期段后面可能还跟着时长段。
-  DateTime? _seededRecordedAt(String arg) {
-    final at = arg.indexOf('@');
-    if (at < 0) return null;
-    final rest = arg.substring(at + 1);
-    final next = rest.indexOf('@');
-    final day = DateTime.tryParse(next < 0 ? rest : rest.substring(0, next));
-    if (day == null) return null;
-    final now = DateTime.now();
-    return DateTime(day.year, day.month, day.day, now.hour, now.minute, now.second);
-  }
-
-  /// 解析 key 第 3 段（`new@day@dur` 里的 dur，**秒**），不是合法正整数就当没给。
-  int? _seededDurationSec(String arg) {
-    final first = arg.indexOf('@');
-    if (first < 0) return null;
-    final second = arg.indexOf('@', first + 1);
-    if (second < 0) return null;
-    final value = int.tryParse(arg.substring(second + 1));
-    return value == null || value <= 0 ? null : value;
   }
 
   EditRecordState get _current =>

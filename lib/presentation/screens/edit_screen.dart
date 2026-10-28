@@ -43,23 +43,39 @@ class _EditScreenState extends ConsumerState<EditScreen> {
     initialDurationSec: widget.initialDurationSec,
   );
 
+  /// 新建时的首帧状态（2026-10-28）。
+  ///
+  /// `AsyncNotifier.build` 即使同步 return，Riverpod 也要等一次异步边界才把值
+  /// 交出来 —— 页面第一帧只能画转圈。但新建记录**没有任何 IO**（日期与时长都
+  /// 编码在 key 里），这一帧纯属白等，表现为「点停止计时后先闪一下转圈」。
+  /// 这里用 provider 同一个构造先画出表单，等真实值到达再无缝换过去。
+  ///
+  /// 既有记录没有这个兜底：它必须等库里的数据，转圈是诚实的。
+  late final EditRecordState? _newSeed =
+      _key == kNewRecordId || _key.startsWith('$kNewRecordId@')
+      ? newRecordStateFromKey(_key)
+      : null;
+
   @override
   Widget build(BuildContext context) {
     final async = ref.watch(editRecordProvider(_key));
     final controller = ref.watch(editRecordProvider(_key).notifier);
 
-    return async.when(
-      loading: () =>
-          const Scaffold(body: Center(child: CircularProgressIndicator())),
-      error: (error, stack) => Scaffold(
+    if (async.hasError) {
+      return Scaffold(
         appBar: AppBar(),
-        body: Center(child: Text('加载失败：$error')),
-      ),
-      data: (state) => _EditBody(
-        state: state,
-        controller: controller,
-        showBackfillHint: widget.initialDay != null && widget.recordId == null,
-      ),
+        body: Center(child: Text('加载失败：${async.error}')),
+      );
+    }
+
+    final state = async.valueOrNull ?? _newSeed;
+    if (state == null) {
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+    return _EditBody(
+      state: state,
+      controller: controller,
+      showBackfillHint: widget.initialDay != null && widget.recordId == null,
     );
   }
 }
