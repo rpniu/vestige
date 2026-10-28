@@ -163,7 +163,12 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     //
     // 候选集 = 「当前屏幕上看得见的这些」。它同时是三态全选框的判据和剪枝的依据 ——
     // 勾选集必须始终是候选集的子集，否则「移入回收站」会删掉用户没看见的记录。
-    final candidates = _selectableIdsOf(rows);
+    //
+    // 只在多选态里算：非多选态下它没有任何消费者（剪枝只在勾选集非空时才可能命中，
+    // 而勾选集非空必然意味着多选态已开），为几千行记录白建一个 Set 不值。
+    final candidates = _selectionMode
+        ? _selectableIdsOf(rows)
+        : const <String>{};
 
     // 记录被删掉、或被标签筛掉之后，把失效的勾选清掉。
     // 放在 build 里而不是写数据的地方：候选集是**派生**的，只有 build 知道它现在是什么。
@@ -1981,11 +1986,12 @@ class _EmptyState extends StatelessWidget {
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text(
-                    // 文案必须指向**现在真实存在**的入口（2026-10-27 审查 m-001）：
-                    // 「长按 + 」那个手势 2026-09-28 已随 FAB 长按方案一起移除，
-                    // 原文案会让用户对着按钮长按、然后以为功能坏了。
+                    // 文案必须指向**现在真实存在**的入口（2026-10-27 审查 m-001，
+                    // 2026-10-28 复核）：两句都曾指向已删除的图标 ——
+                    // 先是「长按 + 」的旧方案，后是「FAB 上方的闪电图标」。
+                    // 现在「速记」是「+」的长按（见 _NewRecordButton）。
                     '长按卡片可多选、整体调整日期；'
-                    '点 FAB 上方的闪电图标 = 立刻记一条今天的。',
+                    '长按右下角「+」= 立刻记一条今天的。',
                     style: theme.textTheme.labelMedium?.copyWith(
                       color: scheme.onSurfaceVariant,
                       height: 1.55,
