@@ -458,11 +458,23 @@ class _RecordTimeCard extends StatelessWidget {
 
   Future<void> _pickDate(BuildContext context) async {
     final now = DateTime.now();
+    // 允许记录落在 2000 年以前（CSV 导入的历史数据可能更早），
+    // 否则 `showDatePicker` 会因 initialDate 早于 firstDate 直接断言失败 ——
+    // 表现为「点日期这一行就崩」。有更早的记录时把下界跟着放开到那一年。
+    final firstDate = state.recordedAt.year < 2000
+        ? DateTime(state.recordedAt.year)
+        : DateTime(2000);
+    // initialDate 必须落在 [firstDate, lastDate] 内：补记允许选过去，
+    // 但未来日期只能是「库里已有」的那种（时钟回拨、手工改库）。
+    final raw = state.recordedAt;
+    final initialDate = raw.isBefore(firstDate)
+        ? firstDate
+        : (raw.isAfter(now) ? now : raw);
     final picked = await showDatePicker(
       context: context,
       locale: const Locale('zh', 'CN'),
-      initialDate: state.recordedAt.isAfter(now) ? now : state.recordedAt,
-      firstDate: DateTime(2000),
+      initialDate: initialDate,
+      firstDate: firstDate,
       // 不允许记录未来：补记是「补交过去」，往前没有边界，往后没有意义
       lastDate: now,
       helpText: '选择这条记录归属的日期',

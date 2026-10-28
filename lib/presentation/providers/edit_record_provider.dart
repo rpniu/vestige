@@ -230,6 +230,8 @@ class EditRecordController
           durationSec: s.durationSec,
         );
         // 落库后 createdAt 就是「现在」，同步回状态以便立刻显示补记标记。
+        // `originalDurationSec` 一起对齐到已落库的值：它记的是「库里现在是什么」，
+        // 不刷新的话，之后再清空时长会被判成「本来就没有」，写库时被当成不动。
         final now = DateTime.now();
         _update(
           (c) => c.copyWith(
@@ -237,6 +239,8 @@ class EditRecordController
             isSaving: false,
             createdAt: now,
             updatedAt: now,
+            originalDurationSec: c.durationSec,
+            overrideOriginalDuration: true,
           ),
         );
       } else {
@@ -251,7 +255,16 @@ class EditRecordController
           durationSec: s.durationSec,
           clearDuration: s.durationSec == null && hadDuration,
         );
-        _update((c) => c.copyWith(isSaving: false, updatedAt: DateTime.now()));
+        _update(
+          (c) => c.copyWith(
+            isSaving: false,
+            updatedAt: DateTime.now(),
+            // 同上：已落库的时长成为新的「原值」，否则「设时长 → 保存 → 清空 → 保存」
+            // 第二轮会把清空判成空操作，界面显示没时长、库里还留着旧值。
+            originalDurationSec: c.durationSec,
+            overrideOriginalDuration: true,
+          ),
+        );
       }
       return true;
     } catch (e) {
@@ -377,6 +390,8 @@ class EditRecordState {
     bool clearError = false,
     int? durationSec,
     bool clearDuration = false,
+    int? originalDurationSec,
+    bool overrideOriginalDuration = false,
   }) =>
       EditRecordState(
         id: id ?? this.id,
@@ -391,6 +406,10 @@ class EditRecordState {
         error: clearError ? null : (error ?? this.error),
         durationSec:
             clearDuration ? null : (durationSec ?? this.durationSec),
-        originalDurationSec: originalDurationSec,
+        // 「原值」必须能被显式改成 null（清空时长后它就该是 null），
+        // 所以不能只靠 `?? this.x` —— 那样 null 会被当成「没传」而保留旧值。
+        originalDurationSec: overrideOriginalDuration
+            ? originalDurationSec
+            : this.originalDurationSec,
       );
 }
