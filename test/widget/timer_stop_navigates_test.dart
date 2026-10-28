@@ -22,6 +22,7 @@ import 'package:vestige/data/database/app_database.dart';
 import 'package:vestige/presentation/providers/records_provider.dart';
 import 'package:vestige/presentation/providers/theme_provider.dart';
 import 'package:vestige/presentation/screens/home_screen.dart';
+import 'package:vestige/presentation/widgets/record_card.dart';
 
 /// 写盘慢 200ms 的 SharedPreferences 替身（见文件头的说明）。
 ///
@@ -126,6 +127,61 @@ void main() {
       findsOneWidget,
       reason: '放弃后既没跳转也没提示，用户无法确认这次计时是否真的取消',
     );
+
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump(Duration.zero);
+  });
+
+  testWidgets('多选态收起计时胶囊，退出多选后回来', (WidgetTester tester) async {
+    final GoRouter router = _router();
+    addTearDown(router.dispose);
+
+    final DateTime now = DateTime.now();
+    final RecordEntity record = RecordEntity(
+      bookId: 'default',
+      id: 'r1',
+      content: '写代码',
+      tags: const <String>[],
+      recordedAt: DateTime(now.year, now.month, now.day, 9),
+      createdAt: DateTime(now.year, now.month, now.day, 9),
+      updatedAt: now,
+      deleted: false,
+    );
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: <Override>[
+          recordsProvider.overrideWith(
+            (ref) => Stream<List<RecordEntity>>.value(<RecordEntity>[record]),
+          ),
+          sharedPreferencesProvider.overrideWithValue(_SlowSharedPreferences()),
+        ],
+        child: MaterialApp.router(routerConfig: router),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('更多'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('开始计时'));
+    await tester.pump();
+    expect(find.byKey(const ValueKey('timer_button')), findsOneWidget);
+
+    // 长按卡片进入多选：胶囊收起 —— 那时点它会跳编辑页，把选中整片丢掉。
+    await tester.longPress(find.byType(RecordCard));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(
+      find.byKey(const ValueKey('timer_button')),
+      findsNothing,
+      reason: '多选态下计时胶囊应让位，避免误触丢失选中',
+    );
+
+    // 退出多选：胶囊回来，计时本身没被打断。
+    await tester.tap(find.byTooltip('取消选择'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(find.byKey(const ValueKey('timer_button')), findsOneWidget);
 
     await tester.pumpWidget(const SizedBox());
     await tester.pump(Duration.zero);

@@ -5,6 +5,8 @@
 // - start / stop / cancel 对状态与存储的收尾；
 // - 恢复时丢掉两类脏数据：起点在未来（时钟回拨）、起点超过 24 小时。
 
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -12,6 +14,33 @@ import 'package:vestige/presentation/providers/duration_timer_provider.dart';
 import 'package:vestige/presentation/providers/theme_provider.dart';
 
 const String _prefsKey = 'duration_timer_start_ms';
+
+/// 内存版 prefs，但 `remove` 故意慢 100ms（模拟真机的平台通道往返）。
+///
+/// 用来复现「停止后立刻重新开始」的写盘乱序：不排队的话，慢的 remove 会落在
+/// 新的 setInt 之后，把起点抹掉。
+class _SlowRemovePrefs implements SharedPreferences {
+  final Map<String, Object> _store = <String, Object>{};
+
+  @override
+  int? getInt(String key) => _store[key] as int?;
+
+  @override
+  Future<bool> setInt(String key, int value) async {
+    _store[key] = value;
+    return true;
+  }
+
+  @override
+  Future<bool> remove(String key) async {
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    _store.remove(key);
+    return true;
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => null;
+}
 
 /// 用给定的初始偏好值起一个容器（模拟「杀进程后重新打开」也走这里）。
 Future<(ProviderContainer, SharedPreferences)> _boot(
@@ -106,6 +135,35 @@ void main() {
       // 清理是写完即忘的，等一个微任务让它落地。
       await Future<void>.delayed(Duration.zero);
       expect(prefs.getInt(_prefsKey), isNull);
+    });
+
+    test('停止后立刻重新开始：新起点不会被上一次的 remove 抹掉', () async {
+      final _SlowRemovePrefs prefs = _SlowRemovePrefs();
+      final ProviderContainer container = ProviderContainer(
+        overrides: <Override>[
+          sharedPreferencesProvider.overrideWithValue(prefs),
+        ],
+      );
+      addTearDown(container.dispose);
+      final DurationTimerNotifier notifier = container.read(
+        durationTimerProvider.notifier,
+      );
+
+      await notifier.start(bookId: 'book-a');
+      expect(prefs.getInt(_prefsKey), isNotNull);
+
+      // 停止（清理被甩到后台），紧接着重新开始 —— 写盘顺序必须仍然确定。
+      unawaited(notifier.stop());
+      await notifier.start(bookId: 'book-b');
+
+      // 等两条写盘都落地。
+      await Future<void>.delayed(const Duration(milliseconds: 400));
+      expect(
+        prefs.getInt(_prefsKey),
+        isNotNull,
+        reason: '新的起点不能被上一次停止的 remove 抹掉（否则重启后计时消失）',
+      );
+      expect(notifier.startedBookId, 'book-b');
     });
 
     test('恢复：正常起点原样恢复', () async {

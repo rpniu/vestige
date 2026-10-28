@@ -111,10 +111,23 @@ class DurationTimerNotifier extends Notifier<DateTime?> {
     await _persist((prefs) => prefs.remove(_prefsKey));
   }
 
+  /// 写存储的**串行队列**：所有 prefs 写操作按调用顺序排队完成。
+  ///
+  /// 为什么必须排队（2026-10-28）：停止计时用 `unawaited(stop())` 把清理甩到
+  /// 后台，紧接着用户可能立刻重新开始（`setInt`）。两条写盘在平台通道上不保证
+  /// 完成顺序 —— 一旦 `remove` 落在 `setInt` 之后，新起点就被抹掉：内存里计时
+  /// 还在走，进程重启后却消失。串起来之后「先 remove 再 setInt」的顺序是确定的，
+  /// 代价只是几次 await 的串接。
+  Future<void> _pendingWrite = Future<void>.value();
+
   /// 写存储。写不进去（存储不可用）就只留在内存里 —— 与 [build] 的降级一致。
-  Future<void> _persist(Future<void> Function(SharedPreferences) action) async {
-    try {
-      await action(ref.read(sharedPreferencesProvider));
-    } catch (_) {}
+  Future<void> _persist(Future<void> Function(SharedPreferences) action) {
+    final Future<void> next = _pendingWrite.then((_) async {
+      try {
+        await action(ref.read(sharedPreferencesProvider));
+      } catch (_) {}
+    });
+    _pendingWrite = next;
+    return next;
   }
 }
