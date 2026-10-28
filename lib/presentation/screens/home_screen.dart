@@ -1220,12 +1220,30 @@ class _TimerButtonState extends ConsumerState<_TimerButton> {
       return;
     }
 
-    // 停止并记录：结算秒数，带着它进编辑页
-    final seconds = await notifier.stop();
-    if (!mounted) return;
+    // 停止并记录：先结算秒数、**同步**把编辑页推出去，再在后台清计时状态。
+    //
+    // 顺序不能反过来（2026-10-28 定位的缺陷）：`stop()` 一置 `state = null`，
+    // 首页立即 rebuild，计时胶囊（连同本 widget）被整棵卸载；await 写盘回来后
+    // `mounted` 已是 false，下面那句 `if (!mounted) return` 会把这次跳转整个吞掉 ——
+    // 表现为「计时消失、人留在首页」，且是否触发取决于写盘与下一帧的赛跑。
+    // 停止并记录：先结算秒数、**同步**把编辑页推出去，再在后台清计时状态。
+    //
+    // 顺序不能反过来（2026-10-28 定位的缺陷）：`stop()` 一置 `state = null`，
+    // 首页立即 rebuild，计时胶囊（连同本 widget）被整棵卸载；await 写盘回来后
+    // `mounted` 已是 false，下面那句 `if (!mounted) return` 会把这次跳转整个吞掉 ——
+    // 表现为「计时消失、人留在首页」，且是否触发取决于写盘与下一帧的赛跑。
+    // 停止并记录：先结算秒数、**同步**把编辑页推出去，再在后台清计时状态。
+    //
+    // 顺序不能反过来（2026-10-28 定位的缺陷）：`stop()` 一置 `state = null`，
+    // 首页立即 rebuild，计时胶囊（连同本 widget）被整棵卸载；await 写盘回来后
+    // `mounted` 已是 false，下面那句 `if (!mounted) return` 会把这次跳转整个吞掉 ——
+    // 表现为「计时消失、人留在首页」，且是否触发取决于写盘与下一帧的赛跑。
+    final seconds = notifier.peekElapsedSeconds();
     // 收尾确认触觉：这一下代表「一件事完成了」。
     HapticFeedback.selectionClick();
     context.push(AppRoutes.editNew(durationSec: seconds));
+    // 清状态与存储不阻塞跳转：计时器已经停了，剩下的只是把 prefs 里的残留抹掉。
+    unawaited(notifier.stop());
   }
 
   @override

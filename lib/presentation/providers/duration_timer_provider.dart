@@ -59,18 +59,31 @@ class DurationTimerNotifier extends Notifier<DateTime?> {
         ));
   }
 
+  /// 结算当前计时得到的秒数：**纯计算**，不改状态。
+  ///
+  /// 至少 1 秒（计了不到 1 秒也记 1 秒，0 秒没有记录价值），
+  /// 超过 [maxSessionDuration] 的按上界结算。
+  ///
+  /// 与 [stop] 共用同一段口径：调用方若要「先拿秒数去跳转、再清状态」，
+  /// 必须用它而不是自己算，否则两处的下限/上限迟早漂移。
+  int peekElapsedSeconds() {
+    final startedAt = state;
+    if (startedAt == null) return 0;
+    final elapsed = DateTime.now().difference(startedAt);
+    final raw = elapsed.inSeconds < 1 ? 1 : elapsed.inSeconds;
+    final max = maxSessionDuration.inSeconds;
+    return raw > max ? max : raw;
+  }
+
   /// 停止并结算：返回经过的**秒数**（至少 1 秒 —— 计了不到 1 秒也记 1 秒，
   /// 0 秒没有记录价值）。超过 [maxSessionDuration] 的按上界结算。
   /// 成功后计时结束、存储清空。
   Future<int> stop() async {
-    final startedAt = state;
-    if (startedAt == null) return 0;
-    final elapsed = DateTime.now().difference(startedAt);
+    if (state == null) return 0;
+    final seconds = peekElapsedSeconds();
     state = null;
     await _persist((prefs) => prefs.remove(_prefsKey));
-    final raw = elapsed.inSeconds < 1 ? 1 : elapsed.inSeconds;
-    final max = maxSessionDuration.inSeconds;
-    return raw > max ? max : raw;
+    return seconds;
   }
 
   /// 放弃本次计时（不结算）。
