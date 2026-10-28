@@ -743,8 +743,23 @@ class _AppBarMenu extends StatelessWidget {
     return PopupMenuButton<_MenuAction>(
       tooltip: '更多',
       icon: const Icon(Icons.more_vert_rounded),
-      // 与页面同族的实色底（默认的 surfaceContainer 在这套主题里偏灰）
-      color: surfaces.card,
+      // 菜单落在按钮**下方**（2026-10-28 用户要求）。
+      // PopupMenuButton 默认是 PopupMenuPosition.over —— 菜单顶边与按钮顶边
+      // 对齐，整块浮层压在 ⋮ 上，只给 offset 加纵向偏移只是在按钮内部挪动，
+      // 图标依旧被盖住。改为 under 后定位基准变成按钮下沿。
+      // under 会先按按钮内边距回收一点，实测（412×892）12 换来的间距是 8：
+      // 既脱离图标，又不至于让菜单显得飘在半个屏幕之外。
+      position: PopupMenuPosition.under,
+      offset: const Offset(0, 12),
+      // 半透明卡面（同一次要求）：0.9 的不透明度能隐约透出身后的记录列表，
+      // 又足以保证菜单文字的可读性。
+      // surfaceTintColor 必须显式置透明 —— Material 3 的 elevation 染色是
+      // 叠在 color 之上的一层不透明色，保留它会把半透明效果抹平。
+      color: surfaces.card.withValues(alpha: 0.9),
+      surfaceTintColor: Colors.transparent,
+      // 圆角对齐项目的小卡片档（16）：默认 4 在这套圆角语言里过于锐利，
+      // 半透明浮块尤其明显。
+      shape: RoundedRectangleBorder(borderRadius: VestigeRadius.smallAll),
       onSelected: (_MenuAction action) {
         switch (action) {
           case _MenuAction.startTimer:
