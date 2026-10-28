@@ -51,5 +51,12 @@ void main() {
       expect(elapsedClockLabel(3600), '1:00:00');
       expect(elapsedClockLabel(3725), '1:02:05');
     });
+
+    // 时钟回拨（起点落在未来）时差值为负。`~/` 与 `%` 对负数向零取整，
+    // 不夹的话 -30 会算出 "59:30" —— 计时器不该出现负时长。
+    test('负秒数按 0 处理，不出现 59:30 这种乱值', () {
+      expect(elapsedClockLabel(-30), '00:00');
+      expect(elapsedClockLabel(-3600), '00:00');
+    });
   });
 }

@@ -427,7 +427,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
             ),
           // 计时胶囊：**只在计时进行中**出现（悬在记一笔正上方）。
           // 平时右下角只有一颗按钮；计时开始后多出这一段，停止 / 放弃都在这里。
-          if (timerRunning)
+          // 多选态同样收起（2026-10-28）：那时点它会跳编辑页，把整片选中丢掉，
+          // 与「记一笔」在多选态收起是同一条理由；计时本身照常走。
+          if (timerRunning && !_selectionMode)
             _floatPositioned(
               side: side,
               bottom: _dockBottom,
@@ -474,7 +476,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   Future<void> _startTimerFromMenu() async {
     final notifier = ref.read(durationTimerProvider.notifier);
     if (ref.read(durationTimerProvider) != null) return;
-    await notifier.start();
+    await notifier.start(bookId: ref.read(activeBookIdProvider));
     if (!mounted) return;
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
@@ -1183,7 +1185,8 @@ class _TimerButtonState extends ConsumerState<_TimerButton> {
   Future<void> _onTap() async {
     final notifier = ref.read(durationTimerProvider.notifier);
     if (ref.read(durationTimerProvider) == null) {
-      await notifier.start();
+      // 把当前记录本一起记下：计时中途切本时，停止后要说明这条会落到哪。
+      await notifier.start(bookId: ref.read(activeBookIdProvider));
       if (!mounted) return;
       ScaffoldMessenger.of(context)
         ..hideCurrentSnackBar()
@@ -1231,11 +1234,29 @@ class _TimerButtonState extends ConsumerState<_TimerButton> {
     // `mounted` 已是 false，下面那句 `if (!mounted) return` 会把这次跳转整个吞掉 ——
     // 表现为「计时消失、人留在首页」，且是否触发取决于写盘与下一帧的赛跑。
     final seconds = notifier.peekElapsedSeconds();
+    // 计时开始时所在的记录本与现在不同 → 停下来要说明这条会记到哪。
+    // 恢复而来的计时（startedBookId 为 null）不判断：那次属于哪一本已无从得知。
+    final String? startedBookId = notifier.startedBookId;
+    final bool crossedBook =
+        startedBookId != null && startedBookId != ref.read(activeBookIdProvider);
+    // messenger 必须在 push 之前取：push 之后本 widget 会被卸载，context 不再可用。
+    final ScaffoldMessengerState messenger = ScaffoldMessenger.of(context);
     // 收尾确认触觉：这一下代表「一件事完成了」。
     HapticFeedback.selectionClick();
     context.push(AppRoutes.editNew(durationSec: seconds));
     // 清状态与存储不阻塞跳转：计时器已经停了，剩下的只是把 prefs 里的残留抹掉。
     unawaited(notifier.stop());
+    if (crossedBook) {
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          const SnackBar(
+            content: Text('这次计时开始于另一个记录本，记录会落到当前本'),
+            duration: Duration(seconds: 3),
+            persist: false,
+          ),
+        );
+    }
   }
 
   @override
@@ -1252,7 +1273,10 @@ class _TimerButtonState extends ConsumerState<_TimerButton> {
 
     return Semantics(
       button: true,
-      label: running ? '停止计时并记录' : '开始计时',
+      // 点下去实际是「先二选一（放弃 / 停止并记录）」。label 直接写「停止计时并记录」
+      // 会让读屏用户以为一步到位，因此用中性的「结束计时」+ hint 说明这一步的选择。
+      label: running ? '结束计时' : '开始计时',
+      hint: running ? '可选择停止并记录，或放弃本次计时' : null,
       key: const ValueKey('timer_button'),
       child: SizedBox(
         height: _dockSegmentHeight,
@@ -1313,7 +1337,9 @@ class _TimerStopDialog extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final elapsed = DateTime.now().difference(startedAt);
-    final seconds = elapsed.inSeconds < 1 ? 1 : elapsed.inSeconds;
+    // 与结算共用同一份口径（1 秒下限 / 24 小时上限）：弹窗说多少，落库就是多少。
+    final seconds = clampSessionSeconds(elapsed);
+    final overLimit = elapsed > DurationTimerNotifier.maxSessionDuration;
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
@@ -1322,7 +1348,7 @@ class _TimerStopDialog extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
           Text(
-            '计时中 · ${elapsedClockLabel(elapsed.inSeconds)}',
+            '计时中 · ${elapsedClockLabel(seconds)}',
             style: theme.textTheme.titleMedium?.copyWith(
               fontWeight: FontWeight.w800,
               fontFeatures: const <FontFeature>[FontFeature.tabularFigures()],
@@ -1330,8 +1356,12 @@ class _TimerStopDialog extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           Text(
-            '这条将记为 ${durationLabel(seconds)}。不做完也可以先记一半 ——'
-            '时长之后在编辑页还能改。',
+            overLimit
+                // 时钟一直没停过（或恢复时就被夹到上界）时，必须说清楚
+                // 「显示的上限就是会写进记录的值」，否则用户会以为丢了一段。
+                ? '已超过 24 小时上限，这条将按 ${durationLabel(seconds)} 记录。'
+                : '这条将记为 ${durationLabel(seconds)}。不做完也可以先记一半 ——'
+                      '时长之后在编辑页还能改。',
             style: theme.textTheme.bodySmall?.copyWith(
               color: theme.colorScheme.onSurfaceVariant,
               height: 1.5,

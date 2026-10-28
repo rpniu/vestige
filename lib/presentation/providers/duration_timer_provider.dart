@@ -15,6 +15,16 @@ import 'package:vestige/presentation/providers/theme_provider.dart';
 final durationTimerProvider =
     NotifierProvider<DurationTimerNotifier, DateTime?>(DurationTimerNotifier.new);
 
+/// 把一段计时压进「1 秒 … 24 小时」的合法区间。
+///
+/// 结算（[DurationTimerNotifier.peekElapsedSeconds]）与确认框展示共用这一份，
+/// 否则会出现「弹窗说 26 小时、落库却是 24 小时」的口径分叉。
+int clampSessionSeconds(Duration elapsed) {
+  final raw = elapsed.inSeconds < 1 ? 1 : elapsed.inSeconds;
+  final max = DurationTimerNotifier.maxSessionDuration.inSeconds;
+  return raw > max ? max : raw;
+}
+
 class DurationTimerNotifier extends Notifier<DateTime?> {
   static const String _prefsKey = 'duration_timer_start_ms';
 
@@ -48,10 +58,22 @@ class DurationTimerNotifier extends Notifier<DateTime?> {
     return startedAt;
   }
 
+  /// 本次计时开始时所在的记录本 id（**内存态，不持久化**）。
+  ///
+  /// 计时器是全局唯一的，但记录要落到某个本里；中途切过本时，停止后必须
+  /// 说清楚这条会去哪。杀进程恢复的场景下这个值拿不到（null），此时不做提示。
+  String? _startedBookId;
+
+  /// 本次计时开始时所在的记录本；没有计时或恢复而来时为 null。
+  String? get startedBookId => _startedBookId;
+
   /// 开始计时（已在计时时幂等 —— 不重置起点）。
-  Future<void> start() async {
+  ///
+  /// [bookId] 由界面传入当前记录本，停止时用来判断是否中途切过本。
+  Future<void> start({String? bookId}) async {
     if (state != null) return;
     final now = DateTime.now();
+    _startedBookId = bookId;
     state = now;
     await _persist((prefs) => prefs.setInt(
           _prefsKey,
@@ -62,17 +84,11 @@ class DurationTimerNotifier extends Notifier<DateTime?> {
   /// 结算当前计时得到的秒数：**纯计算**，不改状态。
   ///
   /// 至少 1 秒（计了不到 1 秒也记 1 秒，0 秒没有记录价值），
-  /// 超过 [maxSessionDuration] 的按上界结算。
-  ///
-  /// 与 [stop] 共用同一段口径：调用方若要「先拿秒数去跳转、再清状态」，
-  /// 必须用它而不是自己算，否则两处的下限/上限迟早漂移。
+  /// 超过 [maxSessionDuration] 的按上界结算。口径见 [clampSessionSeconds]。
   int peekElapsedSeconds() {
     final startedAt = state;
     if (startedAt == null) return 0;
-    final elapsed = DateTime.now().difference(startedAt);
-    final raw = elapsed.inSeconds < 1 ? 1 : elapsed.inSeconds;
-    final max = maxSessionDuration.inSeconds;
-    return raw > max ? max : raw;
+    return clampSessionSeconds(DateTime.now().difference(startedAt));
   }
 
   /// 停止并结算：返回经过的**秒数**（至少 1 秒 —— 计了不到 1 秒也记 1 秒，
@@ -82,6 +98,7 @@ class DurationTimerNotifier extends Notifier<DateTime?> {
     if (state == null) return 0;
     final seconds = peekElapsedSeconds();
     state = null;
+    _startedBookId = null;
     await _persist((prefs) => prefs.remove(_prefsKey));
     return seconds;
   }
@@ -90,6 +107,7 @@ class DurationTimerNotifier extends Notifier<DateTime?> {
   Future<void> cancel() async {
     if (state == null) return;
     state = null;
+    _startedBookId = null;
     await _persist((prefs) => prefs.remove(_prefsKey));
   }
 

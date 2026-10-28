@@ -28,9 +28,12 @@ String durationLabelCompact(int seconds) {
 
 /// 计时中的钟面格式：`MM:SS`（超过 1 小时进位成 `H:MM:SS`）。
 String elapsedClockLabel(int seconds) {
-  final hours = seconds ~/ 3600;
-  final minutes = (seconds % 3600) ~/ 60;
-  final rest = seconds % 60;
+  // 时钟回拨（起点落在未来）会算出负秒数：`~/` 与 `%` 对负数向零取整，
+  // -30 会得到 "59:30" 这种荒谬值。计时永远不该显示负时长，一律按 0 处理。
+  final int safe = seconds < 0 ? 0 : seconds;
+  final hours = safe ~/ 3600;
+  final minutes = (safe % 3600) ~/ 60;
+  final rest = safe % 60;
   if (hours > 0) {
     return '$hours:${minutes.toString().padLeft(2, '0')}:'
         '${rest.toString().padLeft(2, '0')}';
