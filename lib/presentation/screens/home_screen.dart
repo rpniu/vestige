@@ -1058,46 +1058,21 @@ class _ToBottomButtonState extends State<_ToBottomButton> {
 const String quickNoteContent = '速记';
 
 /// 直接记一条今天的记录，并给一次撤销机会。
+///
+/// 撤销走**回退历史**（`undoUpTo`），不是「再删一次」：速记本身会写下一条
+/// 「速记」历史（before 为空、insertedIds 是这一条，见 `RecordActions.quickAddToday`），
+/// 撤销即按这批 id 删除。之前是反过来用 `deleteRecord` 软删 —— 后果是
+/// 记录落进回收站、历史里又多出一条「移入回收站」，两种模型混着走。
 Future<void> quickAddRecord(BuildContext context, WidgetRef ref) async {
-  // 记住**这一条**的 id（2026-10-27 审查 C-003）：原先是撤销时反查
-  // 「业务日期=今天 且 createdAt 最大」的那条，插入还没回流、或当天另存过记录时
-  // 会删掉别的记录。id 是插入前就确定的，撤销因此不再需要推断。
-  final id = await ref
-      .read(recordActionsProvider)
-      .quickAddToday(content: quickNoteContent);
+  final actions = ref.read(recordActionsProvider);
+  await actions.quickAddToday(content: quickNoteContent);
   if (!context.mounted) return;
-
-  ScaffoldMessenger.of(context)
-    ..hideCurrentSnackBar()
-    ..showSnackBar(
-      SnackBar(
-        // 撤销类提示统一带主色撤销图标（与 _toastUndoable 同一套分级）。
-        content: Row(
-          children: <Widget>[
-            Icon(
-              Icons.undo_rounded,
-              size: 18,
-              color: Theme.of(context).colorScheme.primary,
-            ),
-            const SizedBox(width: 10),
-            const Expanded(child: Text('已速记一条（今天）')),
-          ],
-        ),
-        // 与 _toastUndoable 同一档：带撤销按钮的提示都要
-        // ① 显式 persist: false（否则永不消失）② 时长 3 秒。
-        duration: const Duration(seconds: 3),
-        persist: false,
-        action: SnackBarAction(
-          label: '撤销',
-          onPressed: () => _undoQuickAdd(ref, id),
-        ),
-      ),
-    );
-}
-
-/// 撤销刚插入的那一条（按 id 精确软删）。
-Future<void> _undoQuickAdd(WidgetRef ref, String id) async {
-  await ref.read(recordActionsProvider).deleteRecord(id);
+  showUndoableSnackBarOf(
+    context,
+    message: '已速记一条（今天）',
+    entryId: actions.lastUndoEntryId,
+    onUndo: (int entryId) => actions.undoUpTo(entryId),
+  );
 }
 
 class _TimerButton extends ConsumerStatefulWidget {

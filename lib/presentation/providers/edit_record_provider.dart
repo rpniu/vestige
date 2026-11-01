@@ -3,6 +3,7 @@ import 'package:uuid/uuid.dart';
 import 'package:vestige/data/database/app_database.dart';
 import 'package:vestige/domain/day_util.dart';
 import 'package:vestige/presentation/providers/core_providers.dart';
+import 'package:vestige/presentation/providers/records_provider.dart';
 
 /// 编辑页状态。
 ///
@@ -92,6 +93,18 @@ class EditRecordController
 
   EditRecordState get _current =>
       state.valueOrNull ?? EditRecordState.newRecord(id: _uuid.v4());
+
+  /// 写操作集合 —— 保存 / 删除之后的撤销入口。
+  ///
+  /// 页面要在 **pop 之后**才可能点提示条上的「撤销」，那时本 provider 已被
+  /// autoDispose 销毁。所以页面必须在 pop 之前把这个对象取出来，
+  /// 撤销时直接用它的方法，不再回头读 provider。
+  RecordActions get actions => ref.read(recordActionsProvider);
+
+  /// 最近一次保存 / 删除写下的回退点（没有则 null）。
+  ///
+  /// 同样要在 pop 之前读 —— 理由同上。
+  int? get lastUndoEntryId => actions.lastUndoEntryId;
 
   /// 最近一次失败的说明（没有错时为 null）。
   ///
@@ -215,13 +228,16 @@ class EditRecordController
     if (!s.canSave) return false;
 
     _update((c) => c.copyWith(isSaving: true, clearError: true));
-    final repo = ref.read(recordRepositoryProvider);
+    // 落库走 RecordActions 而不是直连仓储：编辑保存也是「数据变动」，必须留
+    // 可撤销的快照。原先这里直连 repo，改内容/日期/标签/时长都退不回来，
+    // 而「批量改标签」「平移日期」却能退（见数据变动撤销审查的 P1）。
+    final actions = ref.read(recordActionsProvider);
     final content = s.content.trim();
     final title = s.title.trim();
 
     try {
       if (s.isNew) {
-        await repo.addRecord(
+        await actions.createRecord(
           id: s.id,
           content: content,
           title: title,
@@ -246,7 +262,7 @@ class EditRecordController
       } else {
         // 时长三态：改了 → 写新值；原来有、现在删了 → 清空；没动 → 不碰那一列。
         final hadDuration = s.originalDurationSec != null;
-        await repo.updateRecord(
+        await actions.editRecord(
           id: s.id,
           content: content,
           title: title,
@@ -274,10 +290,13 @@ class EditRecordController
   }
 
   /// 软删除（进回收站）。成功返回 true。
+  ///
+  /// 走 RecordActions 而不是直连仓储：这一步会写一条「移入回收站」历史，
+  /// 于是提示条上能给「撤销」，操作历史里也查得到「什么时候删的」。
   Future<bool> delete() async {
     if (_current.isNew) return true;
     try {
-      await ref.read(recordRepositoryProvider).deleteRecord(_current.id);
+      await ref.read(recordActionsProvider).deleteRecord(_current.id);
       return true;
     } catch (e) {
       _update((c) => c.copyWith(error: '删除失败：$e'));

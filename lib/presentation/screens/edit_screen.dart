@@ -7,6 +7,7 @@ import 'package:vestige/domain/duration_format.dart';
 import 'package:vestige/presentation/providers/edit_record_provider.dart';
 import 'package:vestige/presentation/providers/records_provider.dart';
 import 'package:vestige/presentation/widgets/center_dialog.dart';
+import 'package:vestige/presentation/widgets/undo_snack_bar.dart';
 
 /// 编辑 / 新建 / 补记页。
 ///
@@ -155,10 +156,26 @@ class _EditBody extends StatelessWidget {
   }
 
   Future<void> _save(BuildContext context) async {
+    // messenger、主色、actions 都要在 pop **之前**取：这一页马上就不在树上了，
+    // 而提示条要飘在上一页上、撤销还要能点。
+    final messenger = ScaffoldMessenger.of(context);
+    final accent = Theme.of(context).colorScheme.primary;
+    final actions = controller.actions;
+    final wasNew = state.isNew;
+
     final ok = await controller.save();
     if (!context.mounted) return;
     if (ok) {
+      final entryId = actions.lastUndoEntryId;
       Navigator.of(context).maybePop();
+      // 保存同样是数据变动：改错内容 / 日期 / 标签都能一步退回（见 _undoable）。
+      showUndoableSnackBar(
+        messenger,
+        accent: accent,
+        message: wasNew ? '已记下这一条' : '已保存修改',
+        entryId: entryId,
+        onUndo: (int id) => actions.undoUpTo(id),
+      );
       return;
     }
     // 失败有两种原因：内容为空（保存前的校验）、或写库抛异常。
@@ -166,7 +183,7 @@ class _EditBody extends StatelessWidget {
     // 他确实写了内容，却被告知没写（2026-10-27 审查 M-002）。
     // 异常原因已经由 controller 记在 state.error 里，优先原样转述。
     final error = controller.lastError;
-    ScaffoldMessenger.of(context)
+    messenger
       ..hideCurrentSnackBar()
       ..showSnackBar(SnackBar(content: Text(error ?? '内容不能为空')));
   }
@@ -190,8 +207,23 @@ class _EditBody extends StatelessWidget {
       ),
     );
     if (confirmed != true || !context.mounted) return;
+
+    final messenger = ScaffoldMessenger.of(context);
+    final accent = Theme.of(context).colorScheme.primary;
+    final actions = controller.actions;
+
     final ok = await controller.delete();
-    if (ok && context.mounted) Navigator.of(context).maybePop();
+    if (!ok || !context.mounted) return;
+    final entryId = actions.lastUndoEntryId;
+    Navigator.of(context).maybePop();
+    // 删除本来就能从回收站捞回来，这里再给一条撤销：省掉「去回收站找它」这一步。
+    showUndoableSnackBar(
+      messenger,
+      accent: accent,
+      message: '已移入回收站',
+      entryId: entryId,
+      onUndo: (int id) => actions.undoUpTo(id),
+    );
   }
 }
 

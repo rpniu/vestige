@@ -212,6 +212,89 @@ void main() {
     }
   });
 
+  // ── 新增类操作（schema v8 的 insertedIds 通道） ──────────────────────
+
+  group('新增类操作的撤销', () {
+    test('速记：写下「速记」历史，撤销后记录彻底消失（不是进回收站）', () async {
+      final id = await actions.quickAddToday(content: '速记');
+      expect(await repo.getRecordById(id), isNotNull);
+
+      final entry = (await actions.recentUndo()).single;
+      expect(entry.label, '速记', reason: '速记现在也进操作历史');
+      expect(entry.insertedRecordIds, <String>[id]);
+
+      final out = await actions.undoUpTo(entry.id);
+
+      expect(out.removed, 1);
+      expect(out.restored, 0);
+      expect(
+        await repo.getRecordById(id),
+        isNull,
+        reason: '撤销新增 = 删掉它；走软删会让历史里又多一条「移入回收站」',
+      );
+      expect(await repo.getDeletedRecords(), isEmpty);
+    });
+
+    test('编辑页新建：可撤销，撤销后这条不存在', () async {
+      await actions.createRecord(
+        id: 'n1',
+        content: '新写的',
+        recordedAt: DateTime(2026, 9, 5, 9),
+      );
+
+      final entry = (await actions.recentUndo()).single;
+      expect(entry.label, '新增记录');
+
+      final out = await actions.undoUpTo(entry.id);
+
+      expect(out.removed, 1);
+      expect(await repo.getRecordById('n1'), isNull);
+    });
+
+    test('编辑页修改：撤销后内容、标签、日期一起回原样', () async {
+      await seed('a', tags: <String>['旧'], day: 1);
+      final before = (await repo.getRecordById('a'))!;
+
+      await actions.editRecord(
+        id: 'a',
+        content: '改过的',
+        tags: <String>['新'],
+        recordedAt: DateTime(2026, 9, 3, 9),
+      );
+      final changed = (await repo.getRecordById('a'))!;
+      expect(changed.content, '改过的');
+      expect(changed.tags, <String>['新']);
+
+      final out = await actions.undoUpTo(actions.lastUndoEntryId!);
+
+      expect(out.restored, 1);
+      final back = (await repo.getRecordById('a'))!;
+      expect(back.content, before.content);
+      expect(back.tags, before.tags);
+      expect(back.recordedAt, before.recordedAt);
+    });
+
+    test('编辑页清空时长后撤销：时长回原值', () async {
+      await repo.addRecord(id: 'd1', content: 'x', durationSec: 600);
+
+      await actions.editRecord(
+        id: 'd1',
+        content: 'x',
+        recordedAt: DateTime(2026, 9, 1, 9),
+        clearDuration: true,
+      );
+      expect((await repo.getRecordById('d1'))!.durationS, isNull);
+
+      await actions.undoUpTo(actions.lastUndoEntryId!);
+
+      expect(
+        (await repo.getRecordById('d1'))!.durationS,
+        600,
+        reason: '快照是整行，时长的三种状态都跟着一起回来',
+      );
+    });
+  });
+
   // ── 删除历史（单条 / 清空） ──────────────────────────────────────────
 
   test('删除单条历史：少一个回退点，记录和别的条目不受影响', () async {

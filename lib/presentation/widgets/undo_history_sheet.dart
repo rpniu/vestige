@@ -274,8 +274,8 @@ class _UndoHistorySheetState extends ConsumerState<UndoHistorySheet> {
         child: Padding(
           padding: const EdgeInsets.symmetric(vertical: 20),
           child: Text(
-            '还没有可回退的操作。\n批量打标签、平移日期、移入回收站、'
-            '彻底删除、清空回收站、CSV 导入都会记在这里。',
+            '还没有可回退的操作。\n新增与编辑、速记、批量打标签、平移日期、'
+            '移入回收站、彻底删除、清空回收站、CSV 导入都会记在这里。',
             style: theme.textTheme.labelSmall?.copyWith(
               color: scheme.onSurfaceVariant,
               height: 1.6,
@@ -359,6 +359,14 @@ class _UndoHistorySheetState extends ConsumerState<UndoHistorySheet> {
       // 导入既有新增也有覆盖，配色上不算「删除类」—— 它整体是往里加东西。
       final String l when l.startsWith('CSV 导入') => (
         Icons.file_upload_outlined,
+        scheme.primary,
+      ),
+      final String l when l.startsWith('新增记录') || l.startsWith('速记') => (
+        Icons.add_circle_outline_rounded,
+        scheme.primary,
+      ),
+      final String l when l.startsWith('编辑记录') => (
+        Icons.edit_outlined,
         scheme.primary,
       ),
       _ => (Icons.history_rounded, scheme.primary),

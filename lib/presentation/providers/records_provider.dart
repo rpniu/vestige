@@ -492,15 +492,80 @@ class RecordActions {
   ///
   /// 返回新记录的 id（2026-10-27 审查 C-003）：调用方（速记）据此精确撤销，
   /// 不必再靠「今天 + 最近入库」反查。id 在插入前生成，落库与返回必然是同一行。
+  ///
+  /// **记历史**（2026-11-01）：这一条 before 为空、insertedIds 是它自己，
+  /// 撤销 = 删掉它。原先速记不进历史，只能靠提示条上的「撤销」反着做一次软删 ——
+  /// 3 秒窗口一过就无处可退，而且那个「撤销」动作本身还会往历史里添一条。
   Future<String> quickAddToday({String content = '1', DateTime? now}) async {
     final id = const Uuid().v4();
-    await _repo.addRecord(
-      id: id,
-      content: content,
-      recordedAt: now ?? DateTime.now(),
+    await _undoable<void>(
+      '速记',
+      <String>[id],
+      () => _repo.addRecord(
+        id: id,
+        content: content,
+        recordedAt: now ?? DateTime.now(),
+      ),
+      insertedIds: <String>[id],
     );
     return id;
   }
+
+  /// 新增一条记录（编辑页「保存」、计时结束后落库）。
+  ///
+  /// 与 [quickAddToday] 是同一条路：内容由用户填，撤销同样按「新增」处理。
+  ///
+  /// 为什么必须收口到这里：编辑页原先直连仓储，新建与修改都不进历史，
+  /// 于是「批量改标签 / 平移日期」可撤销，而单条编辑改标签、改日期不可 ——
+  /// 同一类数据变化两种待遇（见 temp/review/data-mutation-undo-audit-2026-11-01.md）。
+  Future<void> createRecord({
+    required String id,
+    required String content,
+    String? title,
+    List<String> tags = const <String>[],
+    required DateTime recordedAt,
+    int? durationSec,
+  }) =>
+      _undoable<void>(
+        '新增记录',
+        <String>[id],
+        () => _repo.addRecord(
+          id: id,
+          content: content,
+          title: title,
+          tags: tags,
+          recordedAt: recordedAt,
+          durationSec: durationSec,
+        ),
+        insertedIds: <String>[id],
+      );
+
+  /// 修改一条记录（编辑页「保存」）。
+  ///
+  /// 快照由 [_undoable] 在写之前按 id 从库里取 —— 比页面里的「原值」可靠：
+  /// 页面只记了它关心的几个字段（比如时长的原值），而快照是整行。
+  Future<void> editRecord({
+    required String id,
+    required String content,
+    String? title,
+    List<String> tags = const <String>[],
+    required DateTime recordedAt,
+    int? durationSec,
+    bool clearDuration = false,
+  }) =>
+      _undoable<void>(
+        '编辑记录',
+        <String>[id],
+        () => _repo.updateRecord(
+          id: id,
+          content: content,
+          title: title,
+          tags: tags,
+          recordedAt: recordedAt,
+          durationSec: durationSec,
+          clearDuration: clearDuration,
+        ),
+      );
 
   // ── 可撤销的写操作 ──────────────────────────────────────────────────
   //
@@ -560,11 +625,16 @@ class RecordActions {
   ///
   /// 三步（读快照 → 执行 → 写历史）包在**同一个事务**里（2026-10-27 审查 M-006）：
   /// 原先各自独立提交，「数据已改、历史没写」的中间态会让这次操作永久不可撤销。
+  ///
+  /// [insertedIds] 只给「会新增记录」的操作（新增一条、速记）：这些 id 在
+  /// 操作前不存在，快照里当然也没有，撤销时按它们删除（schema v8，
+  /// 与 CSV 导入同一条路径）。
   Future<T> _undoable<T>(
     String label,
     List<String> ids,
     Future<T> Function() action, {
     bool Function(T result)? shouldKeep,
+    List<String> insertedIds = const <String>[],
   }) async {
     lastUndoEntryId = null;
     return _repo.transaction(() async {
@@ -572,7 +642,11 @@ class RecordActions {
       final result = await action();
       // 一条都没改动时不记历史：留一条「撤销了也没有变化」的条目只会干扰列表
       if (shouldKeep == null || shouldKeep(result)) {
-        lastUndoEntryId = await _repo.pushUndo(label, before);
+        lastUndoEntryId = await _repo.pushUndo(
+          label,
+          before,
+          insertedIds: insertedIds,
+        );
       }
       return result;
     });

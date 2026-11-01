@@ -171,7 +171,12 @@ void main() {
     expect(
       await repo.getAllActiveRecordsSync(),
       isEmpty,
-      reason: '撤销应把刚速记的那条软删掉',
+      reason: '撤销走 undoUpTo，按 insertedIds 删除（不是反着软删一次）',
+    );
+    expect(
+      await repo.getDeletedRecords(),
+      isEmpty,
+      reason: '撤销新增不该把记录丢进回收站',
     );
 
     await drainStreamTeardown(tester);
