@@ -86,14 +86,21 @@ class RecordDao extends DatabaseAccessor<VestigeDatabase>
   /// 所以这里先把「已存在于**其它**记录本」的 id 换成新的 uuid，
   /// 让它们作为当前本的新记录插入。语义上也更正确：导入是「把这些内容拿进来」，
   /// 不是「把它们从别处夺过来」。
-  Future<int> upsertAll(List<RecordsCompanion> entries) async {
-    if (entries.isEmpty) return 0;
+  ///
+  /// 返回**实际写入的 id**（跨本冲突被换过 id 的，返回换过之后的那个）——
+  /// 调用方据此判断「这批里哪些是新增」，撤销时按真 id 删除，
+  /// 不能拿 CSV 里的 id 去猜。
+  Future<List<String>> upsertAll(List<RecordsCompanion> entries) async {
+    if (entries.isEmpty) return const <String>[];
     final scoped = <RecordsCompanion>[
       for (final e in await _reassignForeignIds(entries))
         e.copyWith(bookId: Value(bookId)),
     ];
     await batch((b) => b.insertAllOnConflictUpdate(records, scoped));
-    return scoped.length;
+    return <String>[
+      for (final e in scoped)
+        if (e.id.present) e.id.value,
+    ];
   }
 
   /// 把「id 已被别的记录本占用」的条目换成新 id（[upsertAll] 的前置步骤）。

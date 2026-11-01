@@ -73,7 +73,7 @@ class _UndoHistorySheetState extends ConsumerState<UndoHistorySheet> {
       if (ok != true || !mounted) return;
     }
 
-    final restored = await ref.read(recordActionsProvider).undoUpTo(entry.id);
+    final outcome = await ref.read(recordActionsProvider).undoUpTo(entry.id);
     if (!mounted) return;
 
     // 列表要重刷：被回滚掉的条目已经从历史里删了。
@@ -85,7 +85,7 @@ class _UndoHistorySheetState extends ConsumerState<UndoHistorySheet> {
     });
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text('已回退，$restored 条记录回到操作前')));
+      ..showSnackBar(SnackBar(content: Text(outcome.message)));
   }
 
   /// 删除单条历史。**不弹确认** —— 删的只是一个回退点，记录数据分毫不动
@@ -275,7 +275,7 @@ class _UndoHistorySheetState extends ConsumerState<UndoHistorySheet> {
           padding: const EdgeInsets.symmetric(vertical: 20),
           child: Text(
             '还没有可回退的操作。\n批量打标签、平移日期、移入回收站、'
-            '彻底删除、清空回收站都会记在这里。',
+            '彻底删除、清空回收站、CSV 导入都会记在这里。',
             style: theme.textTheme.labelSmall?.copyWith(
               color: scheme.onSurfaceVariant,
               height: 1.6,
@@ -354,6 +354,11 @@ class _UndoHistorySheetState extends ConsumerState<UndoHistorySheet> {
       ),
       final String l when l.startsWith('批量改标签') => (
         Icons.sell_rounded,
+        scheme.primary,
+      ),
+      // 导入既有新增也有覆盖，配色上不算「删除类」—— 它整体是往里加东西。
+      final String l when l.startsWith('CSV 导入') => (
+        Icons.file_upload_outlined,
         scheme.primary,
       ),
       _ => (Icons.history_rounded, scheme.primary),

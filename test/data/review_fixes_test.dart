@@ -11,6 +11,7 @@
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vestige/data/database/app_database.dart';
+import 'package:vestige/data/database/undo_dao.dart';
 import 'package:vestige/data/repositories/record_repository.dart';
 import 'package:vestige/presentation/providers/records_provider.dart';
 
@@ -53,10 +54,12 @@ void main() {
   test('[C-002] CSV 导入覆盖既有记录后可撤销，内容回到导入前', () async {
     await repo.addRecord(id: 'a1', content: '导入前的内容', tags: const ['旧']);
 
-    final count = await actions.importRecords(<RecordEntity>[
+    final outcome = await actions.importRecords(<RecordEntity>[
       imported(id: 'a1', content: '文件里的内容', tags: const ['新']),
     ]);
-    expect(count, 1);
+    expect(outcome.written, 1);
+    expect(outcome.overwritten, 1);
+    expect(outcome.added, 0);
 
     final overwritten = await repo.getRecordById('a1');
     expect(overwritten!.content, '文件里的内容');
@@ -75,15 +78,79 @@ void main() {
     expect(restored.tags, <String>['旧']);
   });
 
-  test('[C-002] 只新增（没有覆盖）时导入不产生空的回退点', () async {
-    await actions.importRecords(<RecordEntity>[
+  test('[C-002/v8] 纯新增的导入同样留回退点，撤销后新记录被删掉', () async {
+    final outcome = await actions.importRecords(<RecordEntity>[
       imported(id: 'brand-new', content: '全新的'),
     ]);
+    expect(outcome.added, 1);
+    expect(outcome.overwritten, 0);
+    expect(await repo.getRecordById('brand-new'), isNotNull);
+
     expect(
       actions.lastUndoEntryId,
-      isNull,
-      reason: '没有既有记录被覆盖 → 快照为空 → 不应留下空历史',
+      isNotNull,
+      reason: 'v8 起纯新增也能撤销：快照为空不再等于「没有可回滚的内容」',
     );
+    final undo = await actions.undoUpTo(actions.lastUndoEntryId!);
+
+    expect(undo.removed, 1, reason: '撤销新增只能靠删除，写回表达不了');
+    expect(undo.restored, 0);
+    expect(
+      await repo.getRecordById('brand-new'),
+      isNull,
+      reason: '撤销导入要把这条行彻底删掉，而不是只移进回收站',
+    );
+  });
+
+  test('[v8] 覆盖 + 新增混合：两条路径同时生效', () async {
+    await repo.addRecord(id: 'old', content: '库里原有的');
+
+    await actions.importRecords(<RecordEntity>[
+      imported(id: 'old', content: '文件覆盖的'),
+      imported(id: 'new', content: '文件新增的'),
+    ]);
+
+    final undo = await actions.undoUpTo(actions.lastUndoEntryId!);
+
+    expect(undo.restored, 1);
+    expect(undo.removed, 1);
+    expect((await repo.getRecordById('old'))!.content, '库里原有的');
+    expect(await repo.getRecordById('new'), isNull);
+  });
+
+  test('[v8] 导入后又编辑过的新增行，撤销导入时一样被删掉', () async {
+    await actions.importRecords(<RecordEntity>[
+      imported(id: 'n1', content: '导入的内容'),
+    ]);
+    // 导入之后编辑它：编辑这一步的快照里含这一行。
+    await actions.applyTags(<String>['n1'], add: <String>['新标签']);
+    expect((await repo.getRecordById('n1'))!.tags, <String>['新标签']);
+
+    // 退到导入之前 → 编辑与导入两步一起回滚。
+    final history = await actions.recentUndo();
+    final importStep = history.last;
+    final undo = await actions.undoUpTo(importStep.id);
+
+    expect(
+      await repo.getRecordById('n1'),
+      isNull,
+      reason: '删除必须写在整行写回之后：写回会把编辑快照里的这一行重新插进来',
+    );
+    expect(undo.removed, 1);
+    expect(undo.restored, 0);
+  });
+
+  test('[v8] 导入的历史条目只在「影响 N 条」里也能看出新增', () async {
+    await actions.importRecords(<RecordEntity>[
+      imported(id: 'only-new', content: 'x'),
+    ]);
+    final entry = (await actions.recentUndo()).first;
+    expect(
+      entry.recordCount,
+      1,
+      reason: '纯新增若不并入条数，历史里会显示「影响 0 条」',
+    );
+    expect(entry.insertedRecordIds, <String>['only-new']);
   });
 
   test('[C-003] quickAddToday 返回的 id 就是落库那一行', () async {

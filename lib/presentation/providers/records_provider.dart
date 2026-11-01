@@ -5,6 +5,7 @@ import 'package:vestige/data/repositories/record_repository.dart';
 import 'package:vestige/domain/calendar_util.dart';
 import 'package:vestige/domain/csv_util.dart';
 import 'package:vestige/domain/day_util.dart';
+import 'package:vestige/domain/undo_outcome.dart';
 import 'package:vestige/presentation/providers/core_providers.dart';
 
 /// 列表 / 统计 / 补记 / 导入导出 的状态层。
@@ -583,8 +584,8 @@ class RecordActions {
   Future<List<UndoEntryEntity>> recentUndo() => _repo.recentUndo();
 
   /// 撤销到 [entryId] 这一步**之前** —— 它自己以及比它更新的步骤一起回滚。
-  /// 返回真正被写回的记录条数。
-  Future<int> undoUpTo(int entryId) => _repo.undoUpTo(entryId);
+  /// 返回实际发生的变化（写回 / 删除的条数）。
+  Future<UndoOutcome> undoUpTo(int entryId) => _repo.undoUpTo(entryId);
 
   /// 删除单条 / 清空撤销历史：只动回退点，不动记录数据。
   /// 「删历史」本身不记进历史 —— 它没有可回滚的内容。
@@ -601,19 +602,64 @@ class RecordActions {
   /// 落库已解析好的记录（导入用）。解析在 `domain/csv_util.dart`，
   /// UI 可以先解析、预览给用户确认，再调用这里写入。
   ///
-  /// **导入是可撤销的**（2026-10-27 审查 C-002）：同 id 的行会整行覆盖既有记录，
-  /// 这是本 App 唯一「既破坏又批量」的入口，没有快照就等于给用户留了一个
-  /// 无法挽回的坑。快照按「将被覆盖的那些 id」取，动作与写历史同事务。
-  Future<int> importRecords(List<RecordEntity> records) async {
+  /// **导入是可撤销的**，且覆盖与新增两种效果都能退（2026-10-27 审查 C-002；
+  /// v8 补齐新增这一半）：
+  /// - 覆盖：快照按「将被覆盖的那些 id」取，撤销时整行写回；
+  /// - 新增：写入后与写之前的既有 id 求差集，撤销时按这批 id 彻底删除。
+  ///
+  /// 差集必须用 **upsertRecords 返回的实际 id** 来算，不能拿 CSV 里的 id 猜：
+  /// 跨记录本撞 id 的行会被 DAO 换成新 uuid（见 `RecordDao.upsertAll`），
+  /// 按文件里的 id 删除会一条都删不中。
+  ///
+  /// 快照、写入、写历史同事务，避免「数据已改、历史没写」的永久不可撤销态。
+  Future<ImportOutcome> importRecords(List<RecordEntity> records) async {
     lastUndoEntryId = null;
-    if (records.isEmpty) return 0;
+    if (records.isEmpty) return const ImportOutcome(written: 0);
     final ids = <String>[for (final r in records) r.id];
     return _repo.transaction(() async {
       final before = await _repo.getRecordsByIds(ids);
-      final count = await _repo.upsertRecords(records);
-      lastUndoEntryId = await _repo.pushUndo('CSV 导入', before);
-      return count;
+      final beforeIds = <String>{for (final r in before) r.id};
+      final written = await _repo.upsertRecords(records);
+      final added = <String>[
+        for (final id in written)
+          if (!beforeIds.contains(id)) id,
+      ];
+      lastUndoEntryId = await _repo.pushUndo(
+        'CSV 导入',
+        before,
+        insertedIds: added,
+      );
+      return ImportOutcome(
+        written: written.length,
+        overwritten: before.length,
+        added: added.length,
+      );
     });
+  }
+}
+
+/// 一次导入的结果：总写入、覆盖既有、纯新增。
+///
+/// 三者分开报是给提示条用的。「导入 N 条」对用户没有信息量 ——
+/// 100 条全新记录和 100 条覆盖既有记录，风险和后续动作完全不同。
+class ImportOutcome {
+  const ImportOutcome({
+    required this.written,
+    this.overwritten = 0,
+    this.added = 0,
+  });
+
+  final int written;
+  final int overwritten;
+  final int added;
+
+  /// 提示条括号里的明细：「新增 2 条，覆盖 1 条」。
+  String get breakdown {
+    final parts = <String>[
+      if (added > 0) '新增 $added 条',
+      if (overwritten > 0) '覆盖 $overwritten 条',
+    ];
+    return parts.isEmpty ? '无变化' : parts.join('，');
   }
 }
 

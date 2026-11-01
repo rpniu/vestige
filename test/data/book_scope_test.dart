@@ -22,6 +22,7 @@ import 'package:vestige/data/database/record_dao.dart';
 import 'package:vestige/data/repositories/record_repository.dart';
 import 'package:vestige/domain/csv_util.dart';
 import 'package:vestige/domain/record_book.dart';
+import 'package:vestige/presentation/providers/records_provider.dart';
 
 void main() {
   late VestigeDatabase db;
@@ -127,8 +128,7 @@ void main() {
       expect(all.single.content, '第二版');
     });
 
-    test('导入会把库里残留的删除时刻清掉（未删除的行不该带 deletedAt）', () async {
-      final mine = repoOf(kDefaultBookId);
+    test('导入会把库里残留的删除时刻清掉（未删除的行不该带 deletedAt）', () async {      final mine = repoOf(kDefaultBookId);
       await mine.addRecord(content: '一条', id: 'r1');
       await mine.deleteRecord('r1'); // 先进回收站，deleted_at 有值
       expect((await mine.getDeletedRecords()).single.deletedAt, isNotNull);
@@ -141,6 +141,32 @@ void main() {
       final row = (await mine.getAllActiveRecordsSync()).single;
       expect(row.deleted, isFalse);
       expect(row.deletedAt, isNull, reason: '未删除的行不能留着删除时刻');
+    });
+
+    test('[v8] 跨本撞 id 的导入行撤销时按换过的 id 删除，源本不受影响', () async {
+      final work = await books.create('工作');
+      final mine = repoOf(kDefaultBookId);
+      final theirs = repoOf(work.id);
+      await mine.addRecord(content: '默认本里的原始记录', id: 'shared-id');
+
+      // 从默认本导出、切到工作本导入：id 撞车 → DAO 换成新 uuid 再插入
+      final actions = RecordActions(theirs);
+      final outcome =
+          await actions.importRecords(await mine.getAllActiveRecordsSync());
+      expect(outcome.added, 1, reason: '换过 id 的行对当前本来说是全新的');
+
+      final copied = (await theirs.getAllActiveRecordsSync()).single;
+      expect(copied.id, isNot('shared-id'));
+
+      final undo = await actions.undoUpTo(actions.lastUndoEntryId!);
+
+      expect(undo.removed, 1);
+      expect(
+        await theirs.getAllActiveRecordsSync(),
+        isEmpty,
+        reason: '必须按「实际写入的 id」删除 —— 拿文件里的 id 会一条都删不中',
+      );
+      expect((await mine.getAllActiveRecordsSync()).single.id, 'shared-id');
     });
   });
 

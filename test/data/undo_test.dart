@@ -43,9 +43,10 @@ void main() {
       );
 
   /// 等价于 UI 上点「撤销」：退掉历史里最新的一步。
+  /// 只取「写回」的条数 —— 本文件里的操作都不产生新增删除。
   Future<int> undoLatest() async {
     final history = await actions.recentUndo();
-    return actions.undoUpTo(history.first.id);
+    return (await actions.undoUpTo(history.first.id)).restored;
   }
 
   test('批量加标签 → 撤销：本来就有该标签的记录不会被误删', () async {

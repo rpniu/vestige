@@ -17,6 +17,7 @@ import 'package:vestige/presentation/providers/record_book_provider.dart';
 import 'package:vestige/presentation/providers/records_provider.dart';
 import 'package:vestige/presentation/providers/theme_provider.dart';
 import 'package:vestige/presentation/services/csv_file.dart';
+import 'package:vestige/presentation/widgets/undo_snack_bar.dart';
 
 /// 我的：主题、数据管理（CSV 文件导入 / 导出）、关于。
 ///
@@ -26,6 +27,8 @@ import 'package:vestige/presentation/services/csv_file.dart';
 ///   由用户选定位置后由插件写盘。两条路都不经过系统分享。
 /// - 导入：选一个 .csv 文件 → 解析 → 把结果（条数 / 补记条数 / 跳过的坏行）
 ///   摊开给用户确认 → 再写库。避免选错文件就直接改数据。
+///   写库后提示条带「撤销」：覆盖的还原、新增的删除，一步回到导入前
+///   （同一步也进「操作历史」，提示条消失后仍可回退）。
 ///
 /// 2026-10-27：Web 目标已移除，原先为它保留的「分享文本 / 下载」分支一并删掉。
 /// 2026-10-28：移动端原本回落到 `share_plus` 分享面板，改为系统保存对话框 ——
@@ -336,13 +339,17 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
       );
       if (confirmed != true || !mounted) return;
 
-      final count = await ref
+      final outcome = await ref
           .read(recordActionsProvider)
           .importRecords(preview.records);
       if (!mounted) return;
-      _toast(
-        '已从「${file.name}」导入 $count 条'
-        '${preview.backfilledCount > 0 ? '，其中补记 ${preview.backfilledCount} 条' : ''}',
+      // 带「撤销」的提示：导入是本 App 唯一「批量且破坏性」的入口，
+      // 覆盖既有记录、又可能一次写进来几百条新增，后悔的窗口必须先给出来。
+      // 提示条之外还有兜底 —— 同一步也进了「操作历史」（20 步、不过期）。
+      _toastUndoable(
+        '已从「${file.name}」导入 ${outcome.written} 条'
+        '（${outcome.breakdown}'
+        '${preview.backfilledCount > 0 ? '，其中补记 ${preview.backfilledCount} 条' : ''}）',
       );
     } catch (e) {
       if (mounted) _toast('导入失败：$e');
@@ -394,6 +401,17 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
       ..hideCurrentSnackBar()
       ..showSnackBar(SnackBar(content: Text(message)));
   }
+
+  /// 显示一条带「撤销」的提示（导入用）。
+  ///
+  /// 约束集中在 [showUndoableSnackBar]：`lastUndoEntryId` 定位「刚做的这一步」、
+  /// `persist: false`、3 秒时长、拿不到条目时不挂按钮。
+  void _toastUndoable(String message) => showUndoableSnackBarOf(
+        context,
+        message: message,
+        entryId: ref.read(recordActionsProvider).lastUndoEntryId,
+        onUndo: (int entryId) => ref.read(recordActionsProvider).undoUpTo(entryId),
+      );
 }
 
 /// 导入预览确认框：把「文件是谁、会写进去什么、哪些行会被丢掉」讲清楚。

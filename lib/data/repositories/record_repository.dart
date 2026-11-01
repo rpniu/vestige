@@ -3,6 +3,7 @@ import 'package:vestige/data/database/app_database.dart';
 import 'package:vestige/data/database/record_dao.dart';
 import 'package:vestige/data/database/undo_dao.dart';
 import 'package:vestige/domain/record_snapshot.dart';
+import 'package:vestige/domain/undo_outcome.dart';
 
 /// 仓储层：封装 DAO，对上层屏蔽存储细节（对应原 Kotlin 的 RecordRepository）。
 ///
@@ -200,17 +201,29 @@ class RecordRepository {
 
   /// 记一步可撤销的操作。
   ///
-  /// [before] 是**操作前**的整行快照。空快照不记录 —— 没有可回滚的内容，
-  /// 留一条无法生效的条目只会干扰列表。
+  /// [before] 是**操作前**的整行快照。[insertedIds] 是这次操作**新插入**的
+  /// 记录 id（目前只有 CSV 导入会传）—— 它们不在 [before] 里，撤销时按它删除。
   ///
-  /// 返回新历史条目的 id；**快照为空时返回 null**（表示这次操作没有产生回退点，
+  /// 两者都为空才不记录：没有可回滚的内容，留一条无法生效的条目只会干扰列表。
+  /// 注意**纯新增也要记**（schema v8 起）：只有 new id、没有覆盖的导入同样必须能撤销，
+  /// 而这在 schema v8 之前表达不了（见 [undoUpTo]）。
+  ///
+  /// 返回新历史条目的 id；两者都为空时返回 null（表示这次操作没有产生回退点，
   /// UI 据此不挂「撤销」按钮 —— 见 RecordActions.lastUndoEntryId）。
-  Future<int?> pushUndo(String label, List<RecordEntity> before) async {
-    if (before.isEmpty) return null;
+  Future<int?> pushUndo(
+    String label,
+    List<RecordEntity> before, {
+    List<String> insertedIds = const <String>[],
+  }) async {
+    if (before.isEmpty && insertedIds.isEmpty) return null;
     final id = await _undo.push(
       label: label,
       snapshot: RecordSnapshot.encode(before),
-      recordCount: before.length,
+      // 「影响 N 条」= 覆盖的 + 新增的。两者不相交：同一 id 要么本来就在库里
+      // （进 before），要么是新的（进 insertedIds）；跨本撞 id 的行会被换成新
+      // uuid，原 id 属于别的本，本本的 before 里也不会有它。
+      recordCount: before.length + insertedIds.length,
+      insertedIds: insertedIds,
     );
     await _undo.trim();
     return id;
@@ -230,6 +243,10 @@ class RecordRepository {
   /// 算法：把这几步的快照按「新 → 旧」合并，同一条记录**取最旧的那份**
   /// （那才是这些操作都没发生过时的状态），再整行写回去。
   ///
+  /// 另有一路**删除**（schema v8）：条目里记了「这次新插入」的 id，撤销时那批行必须
+  /// 从库里消失 —— 上面那套「快照写回」只能描述「原来长什么样」，
+  /// 表达不了「这一行本来不存在」。两路合起来，CSV 导入的覆盖与新增都能退。
+  ///
   /// 为什么用「快照 + 整行写回」而不是「每步写一个反向操作」：
   /// - 反向操作对**并集**类语义是错的：批量加标签 #A 的反向是去掉 #A，
   ///   但某条本来就有 #A 的记录，加的时候是空操作，撤销却会把它删掉；
@@ -237,41 +254,58 @@ class RecordRepository {
   ///   整行写回（不存在就插入）能把记录**重新插回去**，
   ///   于是「手滑清空回收站」也能救。
   ///
-  /// 返回真正被写回的记录条数；历史里对应的条目会被删掉。
-  Future<int> undoUpTo(int entryId) async {
+  /// 返回真正发生的变化（写回 + 删除，见 [UndoOutcome]）；历史里对应的条目会被删掉。
+  Future<UndoOutcome> undoUpTo(int entryId) async {
     final entries = await _undo.recent();
     // recent() 已按 id 降序，这里天然就是「新 → 旧」
     final targets = <UndoEntryEntity>[
       for (final e in entries)
         if (e.id >= entryId) e,
     ];
-    if (targets.isEmpty) return 0;
+    if (targets.isEmpty) return UndoOutcome.none;
 
     // 同一条记录可能被多步操作碰过：**取最旧的那份**（= 这些操作都没发生时的状态）。
     // 按「新 → 旧」遍历并覆盖写入 map，最后每个 id 留下的就是最旧那份。
     final byId = <String, RecordEntity>{};
+    // 这几步里「新插入」的 id 并集：撤销后它们不该存在（schema v8）。
+    // 用 Set 去重 —— 同一批记录可能被多步导入反复写入。
+    final inserted = <String>{};
     for (final entry in targets) {
       for (final record in RecordSnapshot.decode(entry.snapshot, bookId: _dao.bookId)) {
         byId[record.id] = record;
       }
+      inserted.addAll(entry.insertedRecordIds);
     }
+    // 一步里既覆盖又新增是不可能的（同 id 要么本来就在，要么是新的），
+    // 所以这里不必处理「同一 id 既写回又删除」的冲突。
 
     // 写回数据与删除历史必须原子（2026-10-27 审查 m-010）：只写回一半、
     // 历史却还在，用户再点一次会重复写回；反过来历史没了、数据没写回则无法重试。
     await transaction(() async {
       await _dao.restoreRows(byId.values.toList(growable: false));
+      // **必须放在写回之后**：导入之后又编辑过的新增行，会出现在「编辑」那一步的
+      // 快照里，写回时会被重新 INSERT 进来；先删后写等于白删。
+      await _dao.hardDeleteMany(inserted.toList(growable: false));
       await _undo.deleteFrom(entryId);
     });
-    return byId.length;
+    // 计数要扣掉「写回之后又被删掉」的那些：导入后编辑过的行会出现在编辑那一步
+    // 的快照里，写回一次再删掉，如实算作「还原」会让提示条自相矛盾
+    // （「还原 1 条、删除新增的 1 条」其实说的是同一行）。
+    final restoredCount = byId.keys
+        .where((String id) => !inserted.contains(id))
+        .length;
+    return UndoOutcome(restored: restoredCount, removed: inserted.length);
   }
 
   // ── CSV 导入 ────────────────────────────────────────────────────────
 
   /// 批量写入（导入用）：同 id 覆盖，新 id 插入。
   /// 解析工作由 `domain/csv_util.dart` 完成，本层只负责持久化。
-  Future<int> upsertRecords(List<RecordEntity> records) => _dao.upsertAll(
-        records.map(_toCompanion).toList(),
-      );
+  ///
+  /// 返回**实际写入的 id**：调用方拿它与「导入前的既有 id」求差集，
+  /// 得到「这次新增了哪些行」，交给 [pushUndo] 的 `insertedIds` 用于撤销。
+  Future<List<String>> upsertRecords(List<RecordEntity> records) =>
+      _dao.upsertAll(records.map(_toCompanion).toList());
 
   /// 把 CSV 解析出的实体转成写入用的 companion。
   ///

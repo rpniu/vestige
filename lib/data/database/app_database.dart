@@ -38,6 +38,10 @@ part 'app_database.g.dart';
 ///   两条外键都要「新列 + 约束」同时生效，而 SQLite **不允许**
 ///   `ALTER TABLE ... ADD COLUMN ... REFERENCES`（除非默认值为 NULL），
 ///   所以这两张表在升级路径上是**重建**的：建新表 → 拷数据 → 丢旧表 → 改名 → 补索引。
+/// - v8：undo_entries 加 inserted_ids（JSON 数组，默认 `[]`）。
+///   记下「这次操作新插入的记录 id」，撤销导入时据此把这些行**彻底删掉** ——
+///   快照只能还原被覆盖的行，表达不了「新增」。可空语义不适用（空数组即空），
+///   故给 `NOT NULL DEFAULT '[]'`，老库存量历史一律视为「没有新增」。
 @DriftDatabase(
   tables: [Records, UndoEntries, RecordBooks],
   daos: [RecordDao],
@@ -49,7 +53,7 @@ class VestigeDatabase extends _$VestigeDatabase {
 
   /// 当前 schema 版本（公开常量，便于测试与排查直接引用，
   /// 不必每次升版都去改断言里的字面量）。
-  static const int currentSchemaVersion = 7;
+  static const int currentSchemaVersion = 8;
 
   @override
   int get schemaVersion => currentSchemaVersion;
@@ -157,6 +161,15 @@ class VestigeDatabase extends _$VestigeDatabase {
           }
           if (from < 7) {
             await _migrateToRecordBooks();
+          }
+          if (from < 8 &&
+              !await _columnExists('undo_entries', 'inserted_ids')) {
+            // 可空语义用「空数组默认值」表达：老库存量历史都是「没有新增」。
+            // NOT NULL + DEFAULT 让既有行一次到位，不必再 UPDATE 回填。
+            await customStatement(
+              'ALTER TABLE undo_entries '
+              "ADD COLUMN inserted_ids TEXT NOT NULL DEFAULT '[]'",
+            );
           }
         },
         beforeOpen: (details) async {

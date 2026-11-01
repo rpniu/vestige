@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:drift/drift.dart';
 import 'package:vestige/domain/record_book.dart';
 
@@ -33,21 +35,29 @@ class UndoDao extends DatabaseAccessor<VestigeDatabase> with _$UndoDaoMixin {
 
   /// 记一次操作。[snapshot] 是**操作前**的记录快照 JSON。
   ///
+  /// [insertedIds] 只给「会新增记录」的操作（目前只有 CSV 导入）：
+  /// 这些 id 不在 [snapshot] 里，撤销时要按它**彻底删除**。
+  ///
   /// 返回新条目的 rowid —— 调用方据此精确撤销「刚做的这一步」，
   /// 不必假设「历史里最新的一定是我」（见 RecordActions.lastUndoEntryId）。
   Future<int> push({
     required String label,
     required String snapshot,
     required int recordCount,
+    List<String> insertedIds = const <String>[],
   }) =>
       into(undoEntries).insert(
         UndoEntriesCompanion.insert(
           label: label,
           snapshot: snapshot,
           recordCount: recordCount,
+          insertedIds: Value(_encodeIds(insertedIds)),
           bookId: Value(bookId),
         ),
       );
+
+  /// 把 id 列表编成 JSON 数组文本。空列表落 `[]`（与列默认值一致）。
+  static String _encodeIds(List<String> ids) => jsonEncode(ids);
 
   /// 最近 [limit] 条，**新的在前** —— 列表直接照这个顺序渲染。
   Future<List<UndoEntryEntity>> recent({int limit = kUndoHistoryLimit}) =>
@@ -92,4 +102,26 @@ class UndoDao extends DatabaseAccessor<VestigeDatabase> with _$UndoDaoMixin {
 
   /// 清空历史。
   Future<int> clear() => (delete(undoEntries)..where((t) => _inBook)).go();
+}
+
+/// 解析历史条目里「这次操作新插入的记录 id」。
+///
+/// 容错优先：这一列是给撤销追加删除用的，解析失败最多是「这次撤销少删几条」，
+/// 不该让整次撤销抛异常 —— 那会把可以救的记录也一起卡住。
+/// 所以格式不对一律当作空列表，与 schema v8 之前的历史（`[]`）同义。
+extension UndoEntryInsertedIds on UndoEntryEntity {
+  List<String> get insertedRecordIds {
+    final raw = insertedIds.trim();
+    if (raw.isEmpty || raw == '[]') return const <String>[];
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! List) return const <String>[];
+      return <String>[
+        for (final e in decoded)
+          if (e is String) e,
+      ];
+    } catch (_) {
+      return const <String>[];
+    }
+  }
 }

@@ -4,6 +4,7 @@ import 'package:vestige/domain/record_selection.dart';
 import 'package:vestige/presentation/widgets/empty_state.dart';
 import 'package:vestige/presentation/providers/records_provider.dart';
 import 'package:vestige/presentation/widgets/record_card.dart';
+import 'package:vestige/presentation/widgets/undo_snack_bar.dart';
 
 /// 回收站：软删除的记录在这里，可以单条/批量恢复或彻底删除。
 /// 回收站里的记录不参与统计。
@@ -240,49 +241,13 @@ class _TrashScreenState extends ConsumerState<TrashScreen> {
   /// `persist: false` **必须显式给出**：`SnackBar.persist` 默认是 `action != null`，
   /// 带按钮的提示条默认**永不自动消失**，duration 会被忽略
   /// （见 material/snack_bar.dart 里 persist 的文档）。
-  void _toastUndoable(String message) {
-    final entryId = ref.read(recordActionsProvider).lastUndoEntryId;
-    if (entryId == null) {
-      _toast(message);
-      return;
-    }
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(
-          // 撤销类提示统一带主色撤销图标（与首页同一套分级）。
-          content: Row(
-            children: <Widget>[
-              Icon(
-                Icons.undo_rounded,
-                size: 18,
-                color: Theme.of(context).colorScheme.primary,
-              ),
-              const SizedBox(width: 10),
-              Expanded(child: Text(message)),
-            ],
-          ),
-          duration: const Duration(seconds: 3),
-          persist: false,
-          action: SnackBarAction(
-            label: '撤销',
-            onPressed: () => _undoEntry(entryId),
-          ),
-        ),
+  /// 显示一条带「撤销」的提示（与首页同一套，约束集中在 showUndoableSnackBar）。
+  void _toastUndoable(String message) => showUndoableSnackBarOf(
+        context,
+        message: message,
+        entryId: ref.read(recordActionsProvider).lastUndoEntryId,
+        onUndo: (int entryId) => ref.read(recordActionsProvider).undoUpTo(entryId),
       );
-  }
-
-  /// 撤销**指定的那一步**（及比它更新的步骤）。
-  ///
-  /// 这里最有用的一档是「**清空回收站之后后悔**」：快照里带着完整字段，
-  /// 撤销会把那些记录原样插回来。
-  Future<void> _undoEntry(int entryId) async {
-    final actions = ref.read(recordActionsProvider);
-    final restored = await actions.undoUpTo(entryId);
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).hideCurrentSnackBar();
-    _toast(restored == 0 ? '没有可回滚的内容' : '已撤销，$restored 条记录回到操作前');
-  }
 }
 
 class _TrashNotice extends StatelessWidget {

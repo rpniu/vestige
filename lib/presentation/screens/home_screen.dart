@@ -24,6 +24,7 @@ import 'package:vestige/presentation/widgets/error_state.dart';
 import 'package:vestige/presentation/widgets/center_dialog.dart';
 import 'package:vestige/presentation/widgets/record_card.dart';
 import 'package:vestige/presentation/widgets/row_metrics.dart';
+import 'package:vestige/presentation/widgets/undo_snack_bar.dart';
 import 'package:vestige/presentation/providers/home_scroll_provider.dart';
 
 /// 首页：按「归属日期」分组的记录列表。
@@ -647,65 +648,14 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
   /// 显示一条**带「撤销」**的提示（可撤销的操作都用它）。
   ///
-  /// 撤销的目标是**这次操作刚刚写下的那条 undo 记录**（`lastUndoEntryId`），
-  /// 不是「历史里最新的一步」。这两者在多数时候相同，但有一个致命的分歧：
-  /// 当操作本身没有产生历史条目时（快照为空 —— 例如硬删除一批已不存在的 id），
-  /// 「退最新一步」会退掉**上一个不相关的操作**（2026-10-27 审查 M-007）。
-  /// 所以这里先问一句「刚才真的记下历史了吗」，没记就退化成普通提示。
-  ///
-  /// 时长 3 秒：够看清、够反应过来，又不占着屏幕碍事。
-  /// **敢给这么短是因为有兜底** —— 撤销历史保留最近 20 步且不过期，
-  /// 这个窗口错过了还有「操作历史」能退，所以不必把提示条钉在屏幕上等用户。
-  ///
-  /// `persist: false` **必须显式给出**：`SnackBar.persist` 的默认值是
-  /// `action != null` —— 也就是**带按钮的提示条默认永不自动消失**，
-  /// 上面那 3 秒会被完全忽略（见 material/snack_bar.dart 里 persist 的文档）。
-  /// 加了这个 action 就必须同时显式关掉 persist，否则提示会一直挂在屏幕上。
-  void _toastUndoable(String message) {
-    final entryId = ref.read(recordActionsProvider).lastUndoEntryId;
-    if (entryId == null) {
-      // 没有可回退的条目：不挂按钮，避免点了却退掉别的操作。
-      _toast(message);
-      return;
-    }
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(
-          // 撤销类提示统一带主色撤销图标：和普通 toast 在视觉上分级。
-          //（本版 SnackBar 没有 icon 参数，图标并进 content 行首。）
-          content: Row(
-            children: <Widget>[
-              Icon(
-                Icons.undo_rounded,
-                size: 18,
-                color: Theme.of(context).colorScheme.primary,
-              ),
-              const SizedBox(width: 10),
-              Expanded(child: Text(message)),
-            ],
-          ),
-          duration: const Duration(seconds: 3),
-          persist: false,
-          action: SnackBarAction(
-            label: '撤销',
-            onPressed: () => _undoEntry(entryId),
-          ),
-        ),
+  /// 判断「刚才到底有没有记下历史」、`persist: false`、3 秒时长这些约束
+  /// 都在 [showUndoableSnackBar] 里，本方法只负责把本页的 actions 接上去。
+  void _toastUndoable(String message) => showUndoableSnackBarOf(
+        context,
+        message: message,
+        entryId: ref.read(recordActionsProvider).lastUndoEntryId,
+        onUndo: (int entryId) => ref.read(recordActionsProvider).undoUpTo(entryId),
       );
-  }
-
-  /// 撤销**指定的那一步**（以及比它更新的步骤，见 `undoUpTo` 的语义）。
-  ///
-  /// 同时收起提示：否则用户连点两次「撤销」，第二下会退到更早的一步 ——
-  /// 那时屏幕上那条提示已经不描述那一步了，属于「撤销了意料之外的东西」。
-  Future<void> _undoEntry(int entryId) async {
-    final actions = ref.read(recordActionsProvider);
-    final restored = await actions.undoUpTo(entryId);
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).hideCurrentSnackBar();
-    _toast(restored == 0 ? '没有可回滚的内容' : '已撤销，$restored 条记录回到操作前');
-  }
 }
 
 /// AppBar 右上角那个「展开」按钮里的动作。
