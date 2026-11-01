@@ -138,17 +138,25 @@ void main() {
 
     // 注意 `_pickDate` 传了 `lastDate: 今天`，日历里**今天之后的格子是禁用的**
     // （点了没反应），所以这里挑「昨天」，它在任何一天都是可选的。
+    //
+    // 查找器一律限定在对话框内：日历之外也可能出现同名数字（时长、条数），
+    // 不限定就会命中多个 Text，测试的健壮性会随日期漂移。
     final today = DateTime.now();
     final yesterday = DateTime(today.year, today.month, today.day)
         .subtract(const Duration(days: 1));
-    if (today.day > 1) {
-      await tester.tap(find.text('${yesterday.day}'));
-    } else {
-      // 今天是 1 号：昨天落在上个月，先翻页（上个月最后一天一定可选）
-      await tester.tap(find.byIcon(Icons.chevron_left_rounded));
+    Finder inDialog(Finder matching) => find.descendant(
+          of: find.byType(DatePickerDialog),
+          matching: matching,
+        );
+
+    if (today.day == 1) {
+      // 今天是 1 号：昨天落在上个月，先翻页（上个月最后一天一定可选）。
+      // 翻页按钮是 Material 日历自带的 `Icons.chevron_left`，注意它和本站
+      // 月份导航用的 `chevron_left_rounded` 不是同一个图标。
+      await tester.tap(inDialog(find.byIcon(Icons.chevron_left)));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('${yesterday.day}'));
     }
+    await tester.tap(inDialog(find.text('${yesterday.day}')));
     await tester.pumpAndSettle();
     await tester.tap(find.text('确定'));
     await tester.pumpAndSettle();

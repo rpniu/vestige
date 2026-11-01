@@ -10,6 +10,7 @@ import 'package:vestige/data/database/app_database.dart';
 import 'package:vestige/presentation/providers/records_provider.dart';
 import 'package:vestige/presentation/providers/theme_provider.dart';
 import 'package:vestige/presentation/screens/stats_screen.dart';
+import 'package:vestige/presentation/widgets/record_calendar.dart';
 import 'package:vestige/presentation/widgets/record_card.dart';
 
 RecordEntity _rec(
@@ -90,8 +91,15 @@ void main() {
       findsOneWidget,
     );
 
-    // 点今天这一格 → 弹出当天 3 条记录
-    await tester.tap(find.text('${now.day}'));
+    // 点今天这一格 → 弹出当天 3 条记录。
+    // 日格必须限定在日历卡内：统计页其余卡片（「记录习惯」的窗口口径等）
+    // 也会出现 1、3 这类小数字，全页 `find.text` 会命中多个。
+    await tester.tap(
+      find.descendant(
+        of: find.byType(RecordCalendar),
+        matching: find.text('${now.day}'),
+      ),
+    );
     await tester.pumpAndSettle();
     expect(find.text('3 条'), findsOneWidget);
     expect(find.byType(RecordCard), findsNWidgets(3));
