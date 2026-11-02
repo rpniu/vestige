@@ -10,6 +10,8 @@ import 'package:vestige/app/motion.dart';
 import 'package:vestige/app/router.dart';
 import 'package:vestige/app/theme.dart';
 import 'package:vestige/data/config/home_layout_config.dart';
+import 'package:vestige/data/database/app_database.dart';
+import 'package:vestige/domain/book_plan.dart';
 import 'package:vestige/domain/csv_util.dart';
 import 'package:vestige/presentation/providers/home_layout_provider.dart';
 import 'package:vestige/presentation/providers/package_info_provider.dart';
@@ -17,6 +19,7 @@ import 'package:vestige/presentation/providers/record_book_provider.dart';
 import 'package:vestige/presentation/providers/records_provider.dart';
 import 'package:vestige/presentation/providers/theme_provider.dart';
 import 'package:vestige/presentation/services/csv_file.dart';
+import 'package:vestige/presentation/widgets/center_dialog.dart';
 import 'package:vestige/presentation/widgets/undo_snack_bar.dart';
 
 /// 我的：主题、数据管理（CSV 文件导入 / 导出）、关于。
@@ -167,7 +170,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                 _ActionTile(
                   icon: Icons.file_download_outlined,
                   title: '导出 CSV 文件',
-                  subtitle: '选择保存位置，存进设备的文件管理器',
+                  subtitle: '选择记录本，导出成一个文件',
                   enabled: !_busy,
                   onTap: _exportCsv,
                 ),
@@ -228,25 +231,53 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
   /// 屏高八成，历史一长就得在小框里滚，且弹层里再叠确认框容易「层压层」。
   void _openUndoHistory() => context.push(AppRoutes.undoHistory);
 
+  /// 导出：先选记录本，再把它们写进**一个** CSV 文件。
+  ///
+  /// 只有一本时跳过选择弹层 —— 只有一道选项的弹层只是多一次点击。
   Future<void> _exportCsv() async {
-    // 没有活跃记录时不必生成一个只有表头的文件（回收站里的不算）
-    if (ref.read(recordStatsProvider).totalCount == 0) {
-      _toast('没有可导出的记录');
+    final books = await ref.read(recordBooksProvider.future);
+    if (!mounted) return;
+    if (books.isEmpty) {
+      _toast('还没有记录本');
       return;
     }
 
+    // 默认全选：导出的意图绝大多数是「备份我的数据」，
+    // 默认只勾当前本会让用户在别的本上长期漏备份而不自知。
+    final List<String>? picked = books.length == 1
+        ? <String>[books.first.id]
+        : await showVestigeCenterDialog<List<String>>(
+            context: context,
+            maxHeightFactor: 0.7,
+            builder: (BuildContext context) => _ExportBookDialog(
+              books: books,
+              activeBookId: ref.read(activeBookIdProvider),
+            ),
+          );
+    if (picked == null || picked.isEmpty || !mounted) return;
+
     setState(() => _busy = true);
     try {
-      final csv = await ref.read(recordActionsProvider).exportCsv();
-      final fileName =
-          'vestige_export_${DateTime.now().millisecondsSinceEpoch}.csv';
+      final export = await ref.read(recordActionsProvider).exportCsv(picked);
+      // 所选记录本都是空的：不必生成一个只有表头的文件
+      if (export.isEmpty) {
+        _toast('所选记录本里没有可导出的记录');
+        return;
+      }
+      final fileName = _exportFileName(export);
 
       // 1) 桌面端：file_selector 的原生「另存为」
       final path = await _pickSavePath(fileName);
       if (path == _cancelled) return; // 用户取消
       if (path != null) {
-        final ok = await writeCsvToPath(path, csv);
-        if (mounted) _toast(ok ? '已导出到 $path' : '写入文件失败：$path');
+        final ok = await writeCsvToPath(path, export.csv);
+        if (mounted) {
+          _toast(
+            ok
+                ? '已导出 ${export.count} 条（${export.bookLabel}）到 $path'
+                : '写入文件失败：$path',
+          );
+        }
         return;
       }
 
@@ -254,13 +285,13 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
       //    直接传字节，插件在用户确认位置后写盘，不经过系统分享；取消返回 null。
       final saved = await FlutterFileDialog.saveFile(
         params: SaveFileDialogParams(
-          data: Uint8List.fromList(utf8.encode(csv)),
+          data: Uint8List.fromList(utf8.encode(export.csv)),
           fileName: fileName,
           mimeTypesFilter: const <String>['text/csv'],
         ),
       );
       if (!mounted || saved == null) return; // 用户取消
-      _toast('已导出到 ${_readablePath(saved)}');
+      _toast('已导出 ${export.count} 条（${export.bookLabel}）到 ${_readablePath(saved)}');
     } on PlatformException catch (e) {
       // activity_not_found：设备没有能承接 ACTION_CREATE_DOCUMENT 的
       // 文件管理器（精简 ROM 上可能发生），此时告知用户比抛原始错误码有用。
@@ -275,6 +306,30 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+  }
+
+  /// 导出文件名：带上记录本名字，否则多个备份文件只靠时间戳区分，过几天就分不清。
+  ///
+  /// 单个记录本 → `vestige_学习_<毫秒>.csv`；多个 → `vestige_3个记录本_<毫秒>.csv`。
+  /// 名字里的文件系统保留字符替换成 `_`（record_books 允许任意字符，
+  /// 但 `/`、`:` 这类字符出现在文件名里会被系统拒绝或截断）。
+  String _exportFileName(CsvExport export) {
+    final stamp = DateTime.now().millisecondsSinceEpoch;
+    final label = export.bookNames.length == 1
+        ? export.bookNames.values.first
+        : '${export.bookNames.length}个记录本';
+    final safe = _sanitizeFileLabel(label);
+    return 'vestige_${safe}_$stamp.csv';
+  }
+
+  static String _sanitizeFileLabel(String raw) {
+    final cleaned = raw
+        .replaceAll(RegExp(r'[\\/:*?"<>|\x00-\x1F]'), '_')
+        .replaceAll(RegExp(r'\s+'), '_')
+        .trim();
+    if (cleaned.isEmpty) return 'export';
+    // 各平台对文件名长度都有上限，留足时间戳与后缀的余量
+    return cleaned.length > 40 ? cleaned.substring(0, 40) : cleaned;
   }
 
   /// Android 的保存对话框回的是 SAF document path（形如
@@ -328,12 +383,18 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
         return;
       }
 
+      // 预览里的记录本去向用**和写库同一份规则**算出来（domain/book_plan.dart），
+      // 否则会出现「预览说会新建一本，实际写进了默认本」这种说不清的事。
+      final plan = await _planImportBooks(preview);
+      if (!mounted) return;
+
       final confirmed = await showDialog<bool>(
         context: context,
         builder: (context) => _ImportPreviewDialog(
           fileName: file.name,
           sizeLabel: '${(bytes.length / 1024).toStringAsFixed(1)} KB',
           preview: preview,
+          bookPlan: plan,
           looksUtf8: isUtf8,
         ),
       );
@@ -341,14 +402,23 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
 
       final outcome = await ref
           .read(recordActionsProvider)
-          .importRecords(preview.records);
+          .importRecords(preview.records, bookNames: preview.bookNames);
+      // 新建了记录本时同步偏好缓存（「我的」页副标题与总数读的是那份缓存，
+      // 记录本列表本身走数据库流，会自己刷新）
+      if (outcome.createdBooks.isNotEmpty) {
+        await ref.read(recordBooksControllerProvider).syncCache();
+      }
       if (!mounted) return;
       // 带「撤销」的提示：导入是本 App 唯一「批量且破坏性」的入口，
       // 覆盖既有记录、又可能一次写进来几百条新增，后悔的窗口必须先给出来。
       // 提示条之外还有兜底 —— 同一步也进了「操作历史」（20 步、不过期）。
+      final bookNote = outcome.bookNote(
+        currentBookName: ref.read(activeBookNameProvider),
+      );
       _toastUndoable(
         '已从「${file.name}」导入 ${outcome.written} 条'
         '（${outcome.breakdown}'
+        '${bookNote.isEmpty ? '' : '，$bookNote'}'
         '${preview.backfilledCount > 0 ? '，其中补记 ${preview.backfilledCount} 条' : ''}）',
       );
     } catch (e) {
@@ -356,6 +426,19 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+  }
+
+  /// 预览用：把文件里的记录本算成「落到哪一本」。
+  ///
+  /// 只读，不新建 —— 真正的新建发生在用户确认之后的写库事务里。
+  Future<List<BookPlanEntry>> _planImportBooks(CsvImportResult preview) async {
+    final books = await ref.read(bookDaoProvider).getAll();
+    return planBooks(
+      counts: preview.bookCounts,
+      names: preview.bookNames,
+      existingIdNames: {for (final b in books) b.id: b.name},
+      existingNames: {for (final b in books) b.name: b.id},
+    );
   }
 
   void _showAbout() {
@@ -414,18 +497,144 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
       );
 }
 
+/// 导出前选记录本：多选，**默认全选**。
+///
+/// 为什么默认全选：导出的绝大多数用途是「备份我的数据」。默认只勾当前本，
+/// 用户在别的本上就会长期漏备份，而且不会意识到 —— 备份缺口是最不该
+/// 靠用户自己发现的那类问题。
+///
+/// 返回值：选中的记录本 id（按列表顺序）；取消/关闭返回 null。
+class _ExportBookDialog extends StatefulWidget {
+  const _ExportBookDialog({required this.books, required this.activeBookId});
+
+  final List<RecordBookEntity> books;
+
+  /// 当前正在用的那本，只用来在行尾打个「当前」标记。
+  final String activeBookId;
+
+  @override
+  State<_ExportBookDialog> createState() => _ExportBookDialogState();
+}
+
+class _ExportBookDialogState extends State<_ExportBookDialog> {
+  late final Set<String> _picked = <String>{
+    for (final b in widget.books) b.id,
+  };
+
+  bool get _allPicked => _picked.length == widget.books.length;
+
+  void _toggle(String id, bool selected) => setState(() {
+        if (selected) {
+          _picked.add(id);
+        } else {
+          _picked.remove(id);
+        }
+      });
+
+  void _toggleAll() => setState(() {
+        if (_allPicked) {
+          _picked.clear();
+        } else {
+          _picked.addAll(<String>[for (final b in widget.books) b.id]);
+        }
+      });
+
+  void _confirm() {
+    Navigator.of(context).pop(<String>[
+      for (final b in widget.books)
+        if (_picked.contains(b.id)) b.id,
+    ]);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Text(
+              '导出哪几个记录本',
+              style: theme.textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              '选中的记录本会写进同一个 CSV 文件；导入时按记录本分别归位。',
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: scheme.onSurfaceVariant,
+                height: 1.4,
+              ),
+            ),
+            const SizedBox(height: 8),
+            // 记录本可能很多（没有上限），列表自己在弹层里滚
+            Flexible(
+              child: ListView(
+                shrinkWrap: true,
+                children: <Widget>[
+                  for (final book in widget.books)
+                    CheckboxListTile(
+                      value: _picked.contains(book.id),
+                      onChanged: (bool? v) => _toggle(book.id, v ?? false),
+                      title: Text(book.name),
+                      subtitle: book.id == widget.activeBookId
+                          ? const Text('当前记录本')
+                          : null,
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      controlAffinity: ListTileControlAffinity.leading,
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 4),
+            Row(
+              children: <Widget>[
+                TextButton(
+                  onPressed: _toggleAll,
+                  child: Text(_allPicked ? '全不选' : '全选'),
+                ),
+                const Spacer(),
+                FilledButton(
+                  onPressed: _picked.isEmpty ? null : _confirm,
+                  child: Text(
+                    _allPicked
+                        ? '全部导出'
+                        : '导出 ${_picked.length} 个',
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 /// 导入预览确认框：把「文件是谁、会写进去什么、哪些行会被丢掉」讲清楚。
 class _ImportPreviewDialog extends StatelessWidget {
   const _ImportPreviewDialog({
     required this.fileName,
     required this.sizeLabel,
     required this.preview,
+    required this.bookPlan,
     required this.looksUtf8,
   });
 
   final String fileName;
   final String sizeLabel;
   final CsvImportResult preview;
+
+  /// 每个记录本的落点（与写库时同一份规则算出来的）。
+  final List<BookPlanEntry> bookPlan;
+
   final bool looksUtf8;
 
   @override
@@ -452,6 +661,40 @@ class _ImportPreviewDialog extends StatelessWidget {
               ),
             if (preview.skipped > 0)
               _row(context, '跳过', '${preview.skipped} 行', color: scheme.error),
+            const SizedBox(height: 6),
+            // 记录本去向必须摊开：导入会往不同的本里写，用户得先知道
+            // 「这些记录会出现在哪里」，事后才不至于以为数据丢了。
+            Text(
+              '记录本',
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: scheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 2),
+            for (final entry in bookPlan)
+              Padding(
+                padding: const EdgeInsets.only(left: 8, bottom: 2),
+                child: Text(
+                  '· 「${entry.label}」 ${entry.count} 条'
+                  '${entry.target == BookTarget.existing ? '' : '（${entry.note}）'}',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: entry.target == BookTarget.fallback
+                        ? scheme.onSurfaceVariant
+                        : null,
+                    height: 1.4,
+                  ),
+                ),
+              ),
+            if (!preview.hasBookColumn) ...<Widget>[
+              const SizedBox(height: 4),
+              Text(
+                '这个文件是旧版导出的（不含记录本信息），全部导入默认记录本。',
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: scheme.onSurfaceVariant,
+                  height: 1.4,
+                ),
+              ),
+            ],
             if (preview.errors.isNotEmpty) ...<Widget>[
               const SizedBox(height: 6),
               Text(

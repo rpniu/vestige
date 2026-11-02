@@ -129,6 +129,72 @@ class RecordDao extends DatabaseAccessor<VestigeDatabase>
     ];
   }
 
+  // ── 跨记录本（CSV 多本导出 / 导入）────────────────────────────────────
+
+  /// 取指定几本的活跃记录（**导出用**），排序与首页一致。
+  ///
+  /// 这里**故意不带 [_inBook]**：导出的选择是「这次要导哪几本」，
+  /// 可能包含本 DAO 自己不负责的那几本。过滤条件由 [bookIds] 显式给出 ——
+  /// 传空列表返回空，不应退化成「全库」。而 `_inBook` 是「防漏写过滤」的兜底，
+  /// 换成显式白名单同样不会漏。
+  Future<List<RecordEntity>> getActiveInBooks(List<String> bookIds) {
+    if (bookIds.isEmpty) return Future<List<RecordEntity>>.value(const []);
+    return (select(records)
+          ..where((r) => r.deleted.equals(false) & r.bookId.isIn(bookIds))
+          ..orderBy([
+            (r) => OrderingTerm.desc(r.recordedAt),
+            (r) => OrderingTerm.desc(r.createdAt),
+          ]))
+        .get();
+  }
+
+  /// 按一批 id 取整行，**不限记录本**（跨本导入存快照用）。
+  ///
+  /// 导入可能同时写进好几本，快照也必须覆盖到那几本 —— 只用
+  /// [_inBook] 取快照会让「撤销」漏掉别本被覆盖的行（2026-10-28 审查 C-001
+  /// 提到的正是这条链）。
+  Future<List<RecordEntity>> getByIdsAnyBook(List<String> ids) {
+    if (ids.isEmpty) return Future<List<RecordEntity>>.value(const []);
+    return (select(records)..where((r) => r.id.isIn(ids))).get();
+  }
+
+  /// 批量 upsert，**每行按自己带的 `book_id` 落库**（跨本导入用）。
+  ///
+  /// 与 [upsertAll] 的差别只在这里：那个把整批强制改判给当前本，
+  /// 这个是「文件说它属于哪一本，就写进哪一本」。两条约束仍然成立：
+  /// - `id` 是全局主键，若已被**另一个记录本**占用，必须换新 id，
+  ///   否则 `ON CONFLICT ... DO UPDATE SET book_id` 会把那一行搬过来；
+  /// - 同本同 id 视为同一条记录，整行覆盖（这是导入的幂等锚点）。
+  ///
+  /// 返回**实际写入的 id**，与 [upsertAll] 同义 —— 撤销「新增」那一半要靠它
+  /// 拿到被换过 uuid 的行，不能拿 CSV 里的 id 去猜。
+  Future<List<String>> upsertAllInBooks(List<RecordsCompanion> entries) async {
+    if (entries.isEmpty) return const <String>[];
+    final ids = <String>[
+      for (final e in entries)
+        if (e.id.present) e.id.value,
+    ];
+    final existing = ids.isEmpty
+        ? const <RecordEntity>[]
+        : await (select(records)..where((r) => r.id.isIn(ids))).get();
+    final ownerOf = <String, String>{for (final r in existing) r.id: r.bookId};
+
+    final scoped = <RecordsCompanion>[
+      for (final e in entries)
+        if (e.id.present &&
+            ownerOf.containsKey(e.id.value) &&
+            ownerOf[e.id.value] != e.bookId.value)
+          e.copyWith(id: Value(const Uuid().v4()))
+        else
+          e,
+    ];
+    await batch((b) => b.insertAllOnConflictUpdate(records, scoped));
+    return <String>[
+      for (final e in scoped)
+        if (e.id.present) e.id.value,
+    ];
+  }
+
   /// 软删除单条：打上 `deleted`，并**记下进回收站的时刻**（回收站保留期要用）。
   Future<void> softDelete(String id) =>
       (update(records)..where((r) => r.id.equals(id) & _inBook)).write(
@@ -328,6 +394,12 @@ class RecordDao extends DatabaseAccessor<VestigeDatabase>
   ///
   /// **原子性由调用方提供**：`RecordRepository.undoUpTo` 把「写回 + 删历史」
   /// 包在同一个事务里。本方法自己不再开事务，避免双层包装产生嵌套事务。
+  ///
+  /// 定位与插入都用**这一行自己带的 `book_id`**，而不是本 DAO 绑定的那一本：
+  /// 跨记录本导入（一次写进多本）留下的快照包含别的本的行，
+  /// 用 [_inBook] 定位会 0 行命中、再按当前本插入 —— 结果是
+  /// 「撤销被当成新建」甚至主键冲突。对常规撤销二者完全等价
+  /// （快照行的 `book_id` 就是当前本）。
   Future<void> restoreRows(List<RecordEntity> rows) async {
     if (rows.isEmpty) return;
     for (final r in rows) {
@@ -345,11 +417,11 @@ class RecordDao extends DatabaseAccessor<VestigeDatabase>
       );
 
       final affected = await (update(records)
-            ..where((t) => t.id.equals(r.id) & _inBook))
+            ..where((t) => t.id.equals(r.id) & t.bookId.equals(r.bookId)))
           .write(fields);
       if (affected == 0) {
         await into(records).insert(
-          fields.copyWith(id: Value(r.id), bookId: Value(bookId)),
+          fields.copyWith(id: Value(r.id), bookId: Value(r.bookId)),
         );
       }
     }

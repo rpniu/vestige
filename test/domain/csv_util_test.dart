@@ -306,4 +306,94 @@ void main() {
       }
     });
   });
+
+  group('记录本列（v8）', () {
+    RecordEntity recordIn(String bookId, {String id = 'a1'}) => RecordEntity(
+          bookId: bookId,
+          id: id,
+          content: 'c',
+          tags: const <String>[],
+          recordedAt: DateTime(2026, 9, 10, 12),
+          createdAt: DateTime(2026, 9, 10, 12),
+          updatedAt: DateTime(2026, 9, 10, 12),
+          deleted: false,
+        );
+
+    test('导出末尾两列是记录本 id 与名字，每行按自己的本写', () {
+      final csv = CsvUtil.export(
+        <RecordEntity>[
+          recordIn('default', id: 'a1'),
+          recordIn('book-uuid', id: 'a2'),
+        ],
+        bookNames: const <String, String>{'default': '我的记录本', 'book-uuid': '学习'},
+        withBom: false,
+      );
+      final lines = csv.trim().split('\n');
+      expect(lines.first, CsvUtil.headers.join(','));
+      expect(lines.first.split(',').sublist(8), <String>['BookId', 'Book']);
+      expect(lines[1].endsWith(',default,我的记录本'), isTrue);
+      expect(lines[2].endsWith(',book-uuid,学习'), isTrue);
+    });
+
+    test('没有名字时 Book 列留空，但 id 仍然写出来', () {
+      final csv = CsvUtil.export(
+        <RecordEntity>[recordIn('book-uuid')],
+        withBom: false,
+      );
+      expect(csv.trim().split('\n')[1].endsWith(',book-uuid,'), isTrue);
+    });
+
+    test('导出再导入：bookId 与名字都还原，hasBookColumn 为真', () {
+      final csv = CsvUtil.export(
+        <RecordEntity>[recordIn('book-uuid')],
+        bookNames: const <String, String>{'book-uuid': '学习'},
+      );
+      final result = CsvUtil.parse(csv);
+
+      expect(result.hasBookColumn, isTrue);
+      expect(result.records.single.bookId, 'book-uuid');
+      expect(result.bookNames, <String, String>{'book-uuid': '学习'});
+      expect(result.bookCounts, <String, int>{'book-uuid': 1});
+      expect(result.bookLabel('book-uuid'), '学习');
+    });
+
+    test('v5 的 8 列老文件没有记录本列 → 全部归入默认本', () {
+      const old = 'ID,Title,Content,Tags,RecordedAt,CreatedAt,UpdatedAt,DurationSec\n'
+          'a1,,x,,1787831939661,1787831939661,1787831939661,\n';
+      final result = CsvUtil.parse(old);
+
+      expect(result.hasBookColumn, isFalse);
+      expect(result.records.single.bookId, 'default');
+      expect(result.bookNames, isEmpty);
+      // 没有本信息时界面才能说清「全部导入默认本」
+      expect(result.summary(), contains('成功导入 1 条'));
+    });
+
+    test('缺列时的落点可以由调用方指定（fallbackBookId）', () {
+      const old = 'ID,Title,Content,Tags,RecordedAt,CreatedAt,UpdatedAt,DurationSec\n'
+          'a1,,x,,1787831939661,1787831939661,1787831939661,\n';
+      final result = CsvUtil.parse(old, fallbackBookId: 'another');
+
+      expect(result.records.single.bookId, 'another');
+    });
+
+    test('无表头的 10 列裸数据也能认出记录本', () {
+      const raw = 'a1,,x,,1787831939661,1787831939661,1787831939661,,bk,实习\n';
+      final result = CsvUtil.parse(raw);
+
+      expect(result.records.single.bookId, 'bk');
+      expect(result.bookNames['bk'], '实习');
+      expect(result.hasBookColumn, isTrue);
+    });
+
+    test('记录本名字也过公式防护，导入时还原', () {
+      final csv = CsvUtil.export(
+        <RecordEntity>[recordIn('bk')],
+        bookNames: const <String, String>{'bk': '=1+1'},
+        withBom: false,
+      );
+      final result = CsvUtil.parse(csv);
+      expect(result.bookNames['bk'], '=1+1');
+    });
+  });
 }

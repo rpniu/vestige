@@ -14,6 +14,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:vestige/app/theme.dart';
 import 'package:vestige/data/database/app_database.dart';
+import 'package:vestige/data/database/book_dao.dart';
 import 'package:vestige/data/repositories/record_repository.dart';
 import 'package:vestige/presentation/providers/core_providers.dart';
 import 'package:vestige/presentation/providers/records_provider.dart';
@@ -34,7 +35,7 @@ void main() {
 
     db = VestigeDatabase(NativeDatabase.memory());
     repo = RecordRepository(db.recordDao);
-    actions = RecordActions(repo);
+    actions = RecordActions(repo, BookDao(db));
 
     await repo.addRecord(
       id: 'a',
@@ -311,7 +312,7 @@ void main() {
         overrides: <Override>[
           appDatabaseProvider.overrideWithValue(db),
           recordActionsProvider
-              .overrideWithValue(_FailingRecentUndoActions(repo)),
+              .overrideWithValue(_FailingRecentUndoActions(repo, BookDao(db))),
         ],
         child: MaterialApp(
           theme:
@@ -336,7 +337,10 @@ void main() {
 
 /// recentUndo 永远抛错 —— 模拟「数据库打不开」的失败态。
 class _FailingRecentUndoActions extends RecordActions {
-  _FailingRecentUndoActions(RecordRepository repo) : super(repo);
+  // RecordActions 的构造参数是私有字段（_repo / _books），无法用 super 参数
+  // ignore: use_super_parameters
+  _FailingRecentUndoActions(RecordRepository repo, BookDao books)
+      : super(repo, books);
 
   @override
   Future<List<UndoEntryEntity>> recentUndo() async {

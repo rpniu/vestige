@@ -230,6 +230,46 @@ void main() {
 
       await drainStreamTeardown(tester);
     });
+
+    testWidgets('导出先让选记录本，默认全选', (tester) async {
+      await addBook('work', '工作');
+      await pump(
+        tester,
+        const ProfileScreen(),
+        activeBookId: 'work',
+        activeBookName: '工作',
+        bookCount: 2,
+      );
+
+      await tester.scrollUntilVisible(
+        find.text('导出 CSV 文件'),
+        300,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('导出 CSV 文件'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('导出哪几个记录本'), findsOneWidget);
+      // 两本都列出来，且默认全选（备份场景不该漏本）
+      expect(find.text('全部导出'), findsOneWidget);
+      expect(find.text('当前记录本'), findsOneWidget);
+
+      // 全不选 → 导出按钮禁用（不生成空文件）
+      await tester.tap(find.text('全不选'));
+      await tester.pumpAndSettle();
+      final disabled = tester.widget<FilledButton>(
+        find.widgetWithText(FilledButton, '导出 0 个'),
+      );
+      expect(disabled.onPressed, isNull);
+
+      // 再全选回来
+      await tester.tap(find.text('全选'));
+      await tester.pumpAndSettle();
+      expect(find.text('全部导出'), findsOneWidget);
+
+      await drainStreamTeardown(tester);
+    });
   });
 
   /// 打开「切换记录本」弹层：入口现在是 AppBar 的 ⋮ 菜单里的一项。

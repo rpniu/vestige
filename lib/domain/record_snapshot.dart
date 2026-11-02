@@ -61,6 +61,9 @@ class RecordSnapshot {
 
   static Map<String, Object?> _encodeOne(RecordEntity r) => <String, Object?>{
         'id': r.id,
+        // 记录本必须一起存：跨记录本导入一次会写进好几本，
+        // 撤销时若按「当前本」还原，别本的行会被插到当前本里去。
+        'bookId': r.bookId,
         'title': r.title,
         'content': r.content,
         'tags': r.tags,
@@ -83,8 +86,7 @@ class RecordSnapshot {
     if (id is! String || content is! String) return null;
     if (recordedAt == null || createdAt == null || updatedAt == null) return null;
 
-    final rawTags = row['tags'];
-    final tags = rawTags is List
+    final rawTags = row['tags'];    final tags = rawTags is List
         ? <String>[
             for (final t in rawTags)
               if (t is String) t,
@@ -98,8 +100,12 @@ class RecordSnapshot {
     final durationS = rawDuration is int
         ? (row['durationS'] == null ? rawDuration * 60 : rawDuration)
         : null;
+    // 旧快照没有 bookId 键 → 用调用方给的记录本（那时还不支持跨本操作）。
+    final rowBookId = row['bookId'];
+    final resolvedBookId =
+        rowBookId is String && rowBookId.isNotEmpty ? rowBookId : bookId;
     return RecordEntity(
-      bookId: bookId,
+      bookId: resolvedBookId,
       id: id,
       title: title is String ? title : null,
       content: content,

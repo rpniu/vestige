@@ -13,6 +13,7 @@
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vestige/data/database/app_database.dart';
+import 'package:vestige/data/database/book_dao.dart';
 import 'package:vestige/data/database/undo_dao.dart';
 import 'package:vestige/data/repositories/record_repository.dart';
 import 'package:vestige/presentation/providers/records_provider.dart';
@@ -25,7 +26,7 @@ void main() {
   setUp(() {
     db = VestigeDatabase(NativeDatabase.memory());
     repo = RecordRepository(db.recordDao);
-    actions = RecordActions(repo);
+    actions = RecordActions(repo, BookDao(db));
   });
 
   tearDown(() => db.close());

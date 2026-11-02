@@ -189,6 +189,14 @@ class RecordRepository {
   Future<List<RecordEntity>> getRecordsByIds(List<String> ids) =>
       _dao.getByIds(ids);
 
+  /// 按一批 id 取整行，**不限记录本**（跨本导入存快照用）。
+  Future<List<RecordEntity>> getRecordsByIdsAnyBook(List<String> ids) =>
+      _dao.getByIdsAnyBook(ids);
+
+  /// 指定几本的活跃记录（**多记录本导出用**）。
+  Future<List<RecordEntity>> getAllActiveRecordsInBooks(List<String> bookIds) =>
+      _dao.getActiveInBooks(bookIds);
+
   /// 回收站里的全部记录（**清空回收站前存快照用**）。
   Future<List<RecordEntity>> getDeletedRecords() => _dao.getDeletedSync();
 
@@ -307,6 +315,16 @@ class RecordRepository {
   Future<List<String>> upsertRecords(List<RecordEntity> records) =>
       _dao.upsertAll(records.map(_toCompanion).toList());
 
+  /// 批量写入，**每行按自己的 `book_id` 落库**（多记录本导入用）。
+  ///
+  /// 与 [upsertRecords] 的分工：那个把整批写进当前本（单本导入的语义），
+  /// 这个尊重文件里的归属。id 与其它本撞车时的处理在 DAO 里，
+  /// 两个入口共用同一套「不夺走别人的行」的规则。
+  ///
+  /// 同样返回实际写入的 id（撤销「新增」要用）。
+  Future<List<String>> upsertRecordsInBooks(List<RecordEntity> records) =>
+      _dao.upsertAllInBooks(records.map(_toCompanion).toList());
+
   /// 把 CSV 解析出的实体转成写入用的 companion。
   ///
   /// `deletedAt` 必须一起写：导入行的 `deleted` 恒为 false（CSV 不含回收站内容），
@@ -314,6 +332,9 @@ class RecordRepository {
   /// 与 `restore()` 维持的不变式冲突，后续任何按 `deletedAt` 的判断都会错。
   RecordsCompanion _toCompanion(RecordEntity r) => RecordsCompanion(
         id: Value(r.id),
+        // 带上 book_id：多本导入要按行归属写入（单本路径的 DAO 会再覆盖一次，
+        // 所以这里多写一个值不会让「导入到当前本」的行为发生变化）。
+        bookId: Value(r.bookId),
         title: Value(r.title),
         content: Value(r.content),
         tags: Value(r.tags),

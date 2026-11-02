@@ -1,12 +1,16 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 import 'package:vestige/data/database/app_database.dart';
+import 'package:vestige/data/database/book_dao.dart';
 import 'package:vestige/data/repositories/record_repository.dart';
+import 'package:vestige/domain/book_plan.dart';
 import 'package:vestige/domain/calendar_util.dart';
 import 'package:vestige/domain/csv_util.dart';
 import 'package:vestige/domain/day_util.dart';
+import 'package:vestige/domain/record_book.dart';
 import 'package:vestige/domain/undo_outcome.dart';
 import 'package:vestige/presentation/providers/core_providers.dart';
+import 'package:vestige/presentation/providers/record_book_provider.dart';
 
 /// 列表 / 统计 / 补记 / 导入导出 的状态层。
 ///
@@ -469,13 +473,21 @@ List<RecordGroup> groupRecordsByDay(List<RecordEntity> records) {
 
 /// 写操作集合。UI 里 `ref.read(recordActionsProvider).xxx()` 即可。
 final recordActionsProvider = Provider<RecordActions>(
-  (ref) => RecordActions(ref.watch(recordRepositoryProvider)),
+  (ref) => RecordActions(
+    ref.watch(recordRepositoryProvider),
+    // 记录本名册只在导入导出时用到（归位 / 带名字进文件），
+    // 它不绑定当前本，也不受切换记录本影响 —— 不跟着仓储一起重建。
+    ref.watch(bookDaoProvider),
+  ),
 );
 
 class RecordActions {
-  RecordActions(this._repo);
+  RecordActions(this._repo, this._books);
 
   final RecordRepository _repo;
+
+  /// 记录本名册（多本导出与导入归位用）。
+  final BookDao _books;
 
   /// 最近一次可撤销操作**实际写下的** undo 条目 id。
   ///
@@ -667,33 +679,73 @@ class RecordActions {
 
   Future<int> clearUndoHistory() => _repo.clearUndoHistory();
 
-  /// 导出为 CSV 文本（含记录日期与入库时间）。
-  Future<String> exportCsv() async {
-    final all = await _repo.getAllActiveRecordsSync();
-    return CsvUtil.export(all);
+  /// 把 [bookIds] 这几本的活跃记录导出成**一个** CSV 文件。
+  ///
+  /// 一次导出多本时，每行末尾两列（`BookId` / `Book`）记下它属于哪一本，
+  /// 导入时按行归位（见 [importRecords]）。这样「备份」只需要一个文件，
+  /// 不必切换记录本导好几次、再自己记哪个文件是哪本。
+  ///
+  /// 记录本名字一并带进文件：id 只在**同一个库**里是有效锚点，
+  /// 换到另一台设备上只能靠名字重新认领。
+  Future<CsvExport> exportCsv(List<String> bookIds) async {
+    final books = await _books.getAll();
+    final names = <String, String>{
+      for (final b in books)
+        if (bookIds.contains(b.id)) b.id: b.name,
+    };
+    // 名字按「库里真实存在的本」取，顺序也按库里的顺序（默认本在前），
+    // 与记录本页看到的顺序一致；文件里不存在的 id 不硬造名字。
+    final records = await _repo.getAllActiveRecordsInBooks(bookIds);
+    return CsvExport(
+      csv: CsvUtil.export(records, bookNames: names),
+      count: records.length,
+      bookNames: names,
+    );
   }
 
   /// 落库已解析好的记录（导入用）。解析在 `domain/csv_util.dart`，
   /// UI 可以先解析、预览给用户确认，再调用这里写入。
   ///
+  /// ## 记录本归位
+  /// 文件里每行都带 `book_id` + 本名（[bookNames]），按这个顺序裁决落到哪一本：
+  /// 1. 本库里**存在这个 id** → 归入它（同一库内导出导入，最精确的一条路）；
+  /// 2. 否则**存在同名本** → 归入同名的那本（跨设备 / 换库场景）；
+  /// 3. 否则按名字**新建一本**，记录写进去；
+  /// 4. 名字缺失或不合法（空 / 超长）→ 归入**默认记录本**。
+  ///
+  /// 没有记录本列的老文件（v5 及更早）解析时已经全部落在默认本上 ——
+  /// 不猜「当前本」：旧文件里没有任何本的信息，猜错等于把数据混进另一本。
+  ///
+  /// ## 可撤销
   /// **导入是可撤销的**，且覆盖与新增两种效果都能退（2026-10-27 审查 C-002；
   /// v8 补齐新增这一半）：
   /// - 覆盖：快照按「将被覆盖的那些 id」取，撤销时整行写回；
   /// - 新增：写入后与写之前的既有 id 求差集，撤销时按这批 id 彻底删除。
   ///
-  /// 差集必须用 **upsertRecords 返回的实际 id** 来算，不能拿 CSV 里的 id 猜：
-  /// 跨记录本撞 id 的行会被 DAO 换成新 uuid（见 `RecordDao.upsertAll`），
-  /// 按文件里的 id 删除会一条都删不中。
+  /// 差集必须用 **upsert 返回的实际 id** 来算，不能拿 CSV 里的 id 猜：
+  /// 跨记录本撞 id 的行会被 DAO 换成新 uuid，按文件里的 id 删除会一条都删不中。
+  ///
+  /// 快照用**不限记录本**的取法（[RecordRepository.getRecordsByIdsAnyBook]）：
+  /// 一次导入可能写进好几本，只按当前本取快照，撤销会漏掉别本被覆盖的行。
   ///
   /// 快照、写入、写历史同事务，避免「数据已改、历史没写」的永久不可撤销态。
-  Future<ImportOutcome> importRecords(List<RecordEntity> records) async {
+  Future<ImportOutcome> importRecords(
+    List<RecordEntity> records, {
+    Map<String, String> bookNames = const <String, String>{},
+  }) async {
     lastUndoEntryId = null;
     if (records.isEmpty) return const ImportOutcome(written: 0);
-    final ids = <String>[for (final r in records) r.id];
     return _repo.transaction(() async {
-      final before = await _repo.getRecordsByIds(ids);
+      final (resolved, createdBooks, targetBooks) =
+          await _resolveBookMapping(records, bookNames);
+      final mapped = <RecordEntity>[
+        for (final r in records)
+          r.copyWith(bookId: resolved[r.bookId] ?? kDefaultBookId),
+      ];
+      final ids = <String>[for (final r in mapped) r.id];
+      final before = await _repo.getRecordsByIdsAnyBook(ids);
       final beforeIds = <String>{for (final r in before) r.id};
-      final written = await _repo.upsertRecords(records);
+      final written = await _repo.upsertRecordsInBooks(mapped);
       final added = <String>[
         for (final id in written)
           if (!beforeIds.contains(id)) id,
@@ -707,12 +759,84 @@ class RecordActions {
         written: written.length,
         overwritten: before.length,
         added: added.length,
+        bookCount: resolved.values.toSet().length,
+        createdBooks: createdBooks,
+        targetBookNames: targetBooks,
       );
     });
   }
+
+  /// 算出「文件里的记录本 id → 本库的记录本 id」，必要时新建记录本。
+  ///
+  /// 归属规则本身在 `domain/book_plan.dart`（导入预览用同一份，两处不会走偏）；
+  /// 这里只负责把「需要新建」的那几本真的建出来。
+  ///
+  /// 必须在一个事务里调用：新建本与写记录要么都成立、要么都不成立，
+  /// 否则会留下一个空的记录本。
+  ///
+  /// 返回映射表、**新建的本名**、以及这次实际写入的本名（按文件顺序去重）。
+  Future<(Map<String, String>, List<String>, List<String>)> _resolveBookMapping(
+    List<RecordEntity> records,
+    Map<String, String> names,
+  ) async {
+    final books = await _books.getAll();
+    final counts = <String, int>{};
+    for (final r in records) {
+      counts[r.bookId] = (counts[r.bookId] ?? 0) + 1;
+    }
+    final plan = planBooks(
+      counts: counts,
+      names: names,
+      existingIdNames: {for (final b in books) b.id: b.name},
+      existingNames: {for (final b in books) b.name: b.id},
+    );
+
+    final out = <String, String>{};
+    final created = <String>[];
+    final targets = <String>[];
+    for (final entry in plan) {
+      if (entry.target == BookTarget.create) {
+        final book = await _books.create(entry.newName!);
+        created.add(book.name);
+        out[entry.csvBookId] = book.id;
+        targets.add(book.name);
+      } else {
+        out[entry.csvBookId] = entry.targetBookId;
+        targets.add(entry.label);
+      }
+    }
+    return (out, created, targets);
+  }
 }
 
-/// 一次导入的结果：总写入、覆盖既有、纯新增。
+/// 一次导出的结果。
+///
+/// 把「文本 + 条数 + 涉及的记录本」一起给 UI：提示条要说清
+/// 「导出 120 条（3 个记录本）」，只报条数会让用户不知道别的本有没有被带上。
+class CsvExport {
+  const CsvExport({
+    required this.csv,
+    required this.count,
+    this.bookNames = const <String, String>{},
+  });
+
+  final String csv;
+  final int count;
+
+  /// 这次导出的记录本：id → 名字（顺序按库里的记录本顺序）。
+  final Map<String, String> bookNames;
+
+  bool get isEmpty => count == 0;
+
+  /// 「3 个记录本」/「记录本「学习」」。
+  String get bookLabel {
+    if (bookNames.isEmpty) return '没有记录本';
+    if (bookNames.length == 1) return '「${bookNames.values.first}」';
+    return '${bookNames.length} 个记录本';
+  }
+}
+
+/// 一次导入的结果：总写入、覆盖既有、纯新增，以及涉及的记录本。
 ///
 /// 三者分开报是给提示条用的。「导入 N 条」对用户没有信息量 ——
 /// 100 条全新记录和 100 条覆盖既有记录，风险和后续动作完全不同。
@@ -721,11 +845,29 @@ class ImportOutcome {
     required this.written,
     this.overwritten = 0,
     this.added = 0,
+    this.bookCount = 1,
+    this.createdBooks = const <String>[],
+    this.targetBookNames = const <String>[],
   });
 
   final int written;
   final int overwritten;
   final int added;
+
+  /// 写进了几个记录本。
+  final int bookCount;
+
+  /// 本次导入**新建**的记录本名字（库里原本没有同名本）。
+  ///
+  /// 必须在提示条里说出来：用户会突然发现记录本列表多了一本，
+  /// 不提前讲清楚就会被当成「App 自己乱建东西」。
+  final List<String> createdBooks;
+
+  /// 这次实际写进去的记录本名字（按文件顺序）。
+  ///
+  /// 用途是「只导进了一本、而那本不是正在看的这本」时**必须说明白了** ——
+  /// 否则用户在当前记录本里一条新记录都看不到，只会以为导入失败了。
+  final List<String> targetBookNames;
 
   /// 提示条括号里的明细：「新增 2 条，覆盖 1 条」。
   String get breakdown {
@@ -734,6 +876,24 @@ class ImportOutcome {
       if (overwritten > 0) '覆盖 $overwritten 条',
     ];
     return parts.isEmpty ? '无变化' : parts.join('，');
+  }
+
+  /// 涉及记录本时的补充说明；不需要额外解释时返回空串（提示条不必啰嗦）。
+  ///
+  /// [currentBookName] 是界面上正在看的那一本：记录写进了**别的一本**时必须点名，
+  /// 否则用户在当前记录本里看不到新数据，会以为导入失败。
+  String bookNote({String? currentBookName}) {
+    final parts = <String>[
+      if (bookCount > 1) '分属 $bookCount 个记录本',
+      if (createdBooks.isNotEmpty)
+        '新建记录本 ${createdBooks.map((String n) => '「$n」').join()}',
+      if (bookCount == 1 &&
+          targetBookNames.isNotEmpty &&
+          currentBookName != null &&
+          targetBookNames.first != currentBookName)
+        '写入了「${targetBookNames.first}」',
+    ];
+    return parts.join('，');
   }
 }
 

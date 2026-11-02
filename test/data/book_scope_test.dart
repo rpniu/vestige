@@ -143,30 +143,100 @@ void main() {
       expect(row.deletedAt, isNull, reason: '未删除的行不能留着删除时刻');
     });
 
-    test('[v8] 跨本撞 id 的导入行撤销时按换过的 id 删除，源本不受影响', () async {
+    test('[v8] 导入按文件里的记录本归位，不把别本的行搬到当前本', () async {
       final work = await books.create('工作');
       final mine = repoOf(kDefaultBookId);
       final theirs = repoOf(work.id);
       await mine.addRecord(content: '默认本里的原始记录', id: 'shared-id');
+      await mine.addRecord(content: '另一条只在默认本', id: 'only-default');
 
-      // 从默认本导出、切到工作本导入：id 撞车 → DAO 换成新 uuid 再插入
-      final actions = RecordActions(theirs);
-      final outcome =
-          await actions.importRecords(await mine.getAllActiveRecordsSync());
-      expect(outcome.added, 1, reason: '换过 id 的行对当前本来说是全新的');
+      // 当前停在工作本，但文件里写着这两条属于默认本 → 按行归位回默认本
+      final actions = RecordActions(theirs, BookDao(db));
+      final exported = <RecordEntity>[
+        for (final r in await mine.getAllActiveRecordsSync())
+          r.copyWith(content: '文件里的 ${r.content}'),
+      ];
+      final outcome = await actions.importRecords(
+        exported,
+        bookNames: const <String, String>{kDefaultBookId: kDefaultBookName},
+      );
 
-      final copied = (await theirs.getAllActiveRecordsSync()).single;
-      expect(copied.id, isNot('shared-id'));
-
-      final undo = await actions.undoUpTo(actions.lastUndoEntryId!);
-
-      expect(undo.removed, 1);
+      expect(outcome.written, 2);
+      expect(outcome.added, 0, reason: '同本同 id 是覆盖，不是新增');
       expect(
         await theirs.getAllActiveRecordsSync(),
         isEmpty,
-        reason: '必须按「实际写入的 id」删除 —— 拿文件里的 id 会一条都删不中',
+        reason: '不许把别本的行搬到当前本',
       );
-      expect((await mine.getAllActiveRecordsSync()).single.id, 'shared-id');
+      expect(
+        (await mine.getAllActiveRecordsSync()).map((r) => r.content).toSet(),
+        <String>{'文件里的 另一条只在默认本', '文件里的 默认本里的原始记录'},
+        reason: '同 id 同本 → 整行覆盖，覆盖的是默认本那一行',
+      );
+
+      // 撤销：快照必须跨本取到默认本那两行，否则这里什么也还原不了
+      final undo = await actions.undoUpTo(actions.lastUndoEntryId!);
+      expect(undo.restored, 2);
+      expect(
+        (await mine.getAllActiveRecordsSync()).map((r) => r.content).toSet(),
+        <String>{'另一条只在默认本', '默认本里的原始记录'},
+      );
+    });
+
+    test('[v8] 文件里的记录本本库没有时按名字新建，记录写进新本', () async {
+      final work = await books.create('工作');
+      final theirs = repoOf(work.id);
+      final actions = RecordActions(theirs, BookDao(db));
+
+      final outcome = await actions.importRecords(
+        <RecordEntity>[
+          RecordEntity(
+            bookId: 'other-device-book-uuid',
+            id: 'r1',
+            content: '从另一台设备带过来的',
+            tags: const <String>[],
+            recordedAt: DateTime(2026, 9, 1, 9),
+            createdAt: DateTime(2026, 9, 1, 9),
+            updatedAt: DateTime(2026, 9, 1, 9),
+            deleted: false,
+          ),
+        ],
+        bookNames: const <String, String>{'other-device-book-uuid': '学习'},
+      );
+
+      expect(outcome.createdBooks, <String>['学习']);
+      expect(outcome.bookCount, 1);
+      final created = (await books.getAll()).firstWhere((b) => b.name == '学习');
+      expect(
+        (await repoOf(created.id).getAllActiveRecordsSync()).single.id,
+        'r1',
+      );
+      expect(await theirs.getAllActiveRecordsSync(), isEmpty);
+    });
+
+    test('[v8] 文件里没带记录本名字时归入默认本，不丢记录', () async {
+      final work = await books.create('工作');
+      final theirs = repoOf(work.id);
+      final actions = RecordActions(theirs, BookDao(db));
+
+      await actions.importRecords(<RecordEntity>[
+        RecordEntity(
+          bookId: 'unknown-book',
+          id: 'r2',
+          content: '认不出归属的记录',
+          tags: const <String>[],
+          recordedAt: DateTime(2026, 9, 2, 9),
+          createdAt: DateTime(2026, 9, 2, 9),
+          updatedAt: DateTime(2026, 9, 2, 9),
+          deleted: false,
+        ),
+      ]);
+
+      expect(
+        (await repoOf(kDefaultBookId).getAllActiveRecordsSync()).single.id,
+        'r2',
+      );
+      expect(await theirs.getAllActiveRecordsSync(), isEmpty);
     });
   });
 
